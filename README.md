@@ -479,18 +479,18 @@ kubectl scale deployment my-agent --replicas=10
 
 ### Haxen Solves This
 
-| You Need                                | Traditional Frameworks  | Haxen                                         |
-| --------------------------------------- | ----------------------- | --------------------------------------------- |
+| You Need                                | Traditional Frameworks  | Haxen                                        |
+| --------------------------------------- | ----------------------- | -------------------------------------------- |
 | **Chatbot prototype**                   | ✅ Quick start           | ✅ Quick start + production infrastructure    |
 | **Learning agent concepts**             | ✅ Simple                | ✅ Simple + real-world patterns               |
 | **Single app, one team**                | ✅ Lightweight           | ✅ Lightweight setup, enterprise-ready output |
-|                                         |                         |                                               |
-| **Production multi-agent system**       | ❌ DIY infrastructure    | ✅ Built-in                                    |
-| **Multiple teams, independent deploys** | ❌ Coordination hell     | ✅ Deploy independently                        |
-| **Scale agents like microservices**     | ❌ Manual                | ✅ Kubernetes-style                            |
-| **Compliance/audit trails**             | ❌ Build yourself        | ✅ Cryptographic proofs                        |
-| **Frontend integration (React/mobile)** | ❌ Custom wrappers       | ✅ REST API                                    |
-| **Long-running tasks (5+ min)**         | ❌ DIY queues + webhooks | ✅ Built-in async + webhooks                   |
+|                                         |                         |                                              |
+| **Production multi-agent system**       | ❌ DIY infrastructure    | ✅ Built-in                                   |
+| **Multiple teams, independent deploys** | ❌ Coordination hell     | ✅ Deploy independently                       |
+| **Scale agents like microservices**     | ❌ Manual                | ✅ Kubernetes-style                           |
+| **Compliance/audit trails**             | ❌ Build yourself        | ✅ Cryptographic proofs                       |
+| **Frontend integration (React/mobile)** | ❌ Custom wrappers       | ✅ REST API                                   |
+| **Long-running tasks (5+ min)**         | ❌ DIY queues + webhooks | ✅ Built-in async + webhooks                  |
 
 **Same code. Same patterns. Zero migration.**
 
@@ -547,6 +547,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and guidelines.
 
 ---
 
-*We believe autonomous software needs the same infrastructure patterns that made microservices successful.*
+*We believe autonomous software needs infrastructure that respects what makes it different - agents that reason, decide, and coordinate - while providing the same operational excellence that made traditional software successful.*
 
 </div>
