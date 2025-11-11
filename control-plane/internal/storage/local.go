@@ -6130,12 +6130,25 @@ func (ls *LocalStorage) ListComponentDIDs(ctx context.Context, agentDID string) 
 		return nil, fmt.Errorf("context cancelled during list component DIDs: %w", err)
 	}
 
-	query := `
-		SELECT function_name, did, agent_did, component_type, function_name,
-			   derivation_path, created_at
-		FROM component_dids WHERE agent_did = ? ORDER BY created_at DESC`
+	var query string
+	var rows *sql.Rows
+	var err error
 
-	rows, err := ls.db.QueryContext(ctx, query, agentDID)
+	if agentDID == "" {
+		// Get all components when agentDID is empty
+		query = `
+			SELECT function_name, did, agent_did, component_type, function_name,
+				   derivation_path, created_at
+			FROM component_dids ORDER BY created_at DESC`
+		rows, err = ls.db.QueryContext(ctx, query)
+	} else {
+		// Get components for specific agent
+		query = `
+			SELECT function_name, did, agent_did, component_type, function_name,
+				   derivation_path, created_at
+			FROM component_dids WHERE agent_did = ? ORDER BY created_at DESC`
+		rows, err = ls.db.QueryContext(ctx, query, agentDID)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to list component DIDs: %w", err)
 	}
