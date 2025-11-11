@@ -675,7 +675,9 @@ var supportedTimeLayouts = []string{
 	time.RFC3339,
 	"2006-01-02T15:04:05.999999999",
 	"2006-01-02T15:04:05",
+	"2006-01-02 15:04:05.999999999-07:00", // PostgreSQL timestamp with timezone
 	"2006-01-02 15:04:05.999999999",
+	"2006-01-02 15:04:05-07:00", // PostgreSQL timestamp with timezone (no microseconds)
 	"2006-01-02 15:04:05",
 }
 
