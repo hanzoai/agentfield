@@ -353,6 +353,7 @@ class Agent(FastAPI):
         async_config: Optional[AsyncConfig] = None,
         callback_url: Optional[str] = None,
         auto_register: bool = True,
+        vc_enabled: Optional[bool] = True,
         **kwargs,
     ):
         """
@@ -389,6 +390,9 @@ class Agent(FastAPI):
             callback_url (str, optional): Explicit callback URL for AgentField server to reach this agent.
                                          If not provided, will use AGENT_CALLBACK_URL environment variable,
                                          auto-detection for containers, or fallback to localhost.
+            vc_enabled (bool | None, optional): Controls default VC generation policy for this agent node.
+                                         True enables VCs for all reasoners/skills (default), False disables,
+                                         and None defers entirely to platform defaults.
             **kwargs: Additional keyword arguments passed to FastAPI constructor.
 
         Example:
@@ -427,6 +431,9 @@ class Agent(FastAPI):
         self.version = version
         self.reasoners = []
         self.skills = []
+        self._agent_vc_enabled: Optional[bool] = vc_enabled
+        self._reasoner_vc_overrides: Dict[str, bool] = {}
+        self._skill_vc_overrides: Dict[str, bool] = {}
         # Track declared return types separately to avoid polluting JSON metadata
         self._reasoner_return_types: Dict[str, Type] = {}
         self.base_url = None
@@ -854,6 +861,61 @@ class Agent(FastAPI):
             execution_context.target_did = did_execution_context.target_did
             execution_context.agent_node_did = did_execution_context.agent_node_did
 
+    def _agent_vc_default(self) -> bool:
+        """Resolve the agent-level VC default, falling back to enabled."""
+        return True if self._agent_vc_enabled is None else self._agent_vc_enabled
+
+    def _set_reasoner_vc_override(
+        self, reasoner_id: str, value: Optional[bool]
+    ) -> None:
+        if value is None:
+            self._reasoner_vc_overrides.pop(reasoner_id, None)
+        else:
+            self._reasoner_vc_overrides[reasoner_id] = value
+
+    def _set_skill_vc_override(self, skill_id: str, value: Optional[bool]) -> None:
+        if value is None:
+            self._skill_vc_overrides.pop(skill_id, None)
+        else:
+            self._skill_vc_overrides[skill_id] = value
+
+    def _effective_component_vc_setting(
+        self, component_id: str, overrides: Dict[str, bool]
+    ) -> bool:
+        if component_id in overrides:
+            return overrides[component_id]
+        return self._agent_vc_default()
+
+    def _should_generate_vc(self, component_id: str, overrides: Dict[str, bool]) -> bool:
+        if not self.did_enabled or not self.vc_generator or not self.vc_generator.is_enabled():
+            return False
+        return self._effective_component_vc_setting(component_id, overrides)
+
+    def _build_vc_metadata(self) -> Dict[str, Any]:
+        """Produce a serializable VC policy snapshot for control-plane visibility."""
+        effective_reasoners = {
+            reasoner["id"]: self._effective_component_vc_setting(
+                reasoner["id"], self._reasoner_vc_overrides
+            )
+            for reasoner in self.reasoners
+            if "id" in reasoner
+        }
+        effective_skills = {
+            skill["id"]: self._effective_component_vc_setting(
+                skill["id"], self._skill_vc_overrides
+            )
+            for skill in self.skills
+            if "id" in skill
+        }
+
+        return {
+            "agent_default": self._agent_vc_default(),
+            "reasoner_overrides": dict(self._reasoner_vc_overrides),
+            "skill_overrides": dict(self._skill_vc_overrides),
+            "effective_reasoners": effective_reasoners,
+            "effective_skills": effective_skills,
+        }
+
     async def _generate_vc_async(
         self,
         vc_generator,
@@ -1027,7 +1089,13 @@ class Agent(FastAPI):
         """Delegate to server handler for route setup"""
         return self.server_handler.setup_agentfield_routes()
 
-    def reasoner(self, path: Optional[str] = None, name: Optional[str] = None):
+    def reasoner(
+        self,
+        path: Optional[str] = None,
+        name: Optional[str] = None,
+        *,
+        vc_enabled: Optional[bool] = None,
+    ):
         """
         Decorator to register a reasoner function.
 
@@ -1037,6 +1105,8 @@ class Agent(FastAPI):
         Args:
             path (str, optional): The API endpoint path for this reasoner. Defaults to /reasoners/{function_name}.
             name (str, optional): Explicit AgentField registration ID. Defaults to the function name.
+            vc_enabled (bool | None, optional): Override VC generation for this reasoner. True forces VC creation,
+                False disables it, and None inherits the agent-level policy.
         """
 
         def decorator(func: Callable) -> Callable:
@@ -1064,6 +1134,9 @@ class Agent(FastAPI):
                         input_fields[param_name] = (param_type, ...)
 
             InputSchema = create_model(f"{func_name}Input", **input_fields)
+
+            # Persist VC override preference
+            self._set_reasoner_vc_override(reasoner_id, vc_enabled)
 
             # Get output schema from return type hint
             return_type = type_hints.get("return", dict)
@@ -1148,6 +1221,9 @@ class Agent(FastAPI):
                 "memory_config": self.memory_config.to_dict(),
                 "return_type_hint": getattr(return_type, "__name__", str(return_type)),
             }
+            reasoner_metadata["vc_enabled"] = self._effective_component_vc_setting(
+                reasoner_id, self._reasoner_vc_overrides
+            )
 
             self.reasoners.append(reasoner_metadata)
             # Preserve the actual return type for local schema reconstruction
@@ -1246,7 +1322,9 @@ class Agent(FastAPI):
             else:
                 result = func(*args, **kwargs)
 
-            if self.did_enabled and self.vc_generator and did_execution_context:
+            if did_execution_context and self._should_generate_vc(
+                reasoner_id, self._reasoner_vc_overrides
+            ):
                 if self.dev_mode:
                     log_debug(
                         f"Triggering VC generation for execution: {did_execution_context.execution_id}"
@@ -1479,6 +1557,8 @@ class Agent(FastAPI):
         tags: Optional[List[str]] = None,
         path: Optional[str] = None,
         name: Optional[str] = None,
+        *,
+        vc_enabled: Optional[bool] = None,
     ):
         """
         Decorator to register a skill function.
@@ -1500,6 +1580,8 @@ class Agent(FastAPI):
             path (str, optional): Custom API endpoint path for this skill.
                                 Defaults to "/skills/{function_name}".
             name (str, optional): Explicit AgentField registration ID. Defaults to the function name.
+            vc_enabled (bool | None, optional): Override VC generation for this skill. True forces VC creation,
+                False disables it, and None inherits the agent-level policy.
 
         Returns:
             Callable: The decorated function with enhanced AgentField integration.
@@ -1579,6 +1661,7 @@ class Agent(FastAPI):
             func_name = func.__name__
             skill_id = name or func_name
             endpoint_path = path or f"/skills/{func_name}"
+            self._set_skill_vc_override(skill_id, vc_enabled)
 
             # Get type hints for input schema
             type_hints = get_type_hints(func)
@@ -1639,7 +1722,9 @@ class Agent(FastAPI):
                     result = original_func(**kwargs)
 
                 # Generate VC asynchronously if DID is enabled
-                if self.did_enabled and self.vc_generator and did_execution_context:
+                if did_execution_context and self._should_generate_vc(
+                    skill_id, self._skill_vc_overrides
+                ):
                     end_time = time.time()
                     duration_ms = int((end_time - start_time) * 1000)
                     asyncio.create_task(
@@ -1663,6 +1748,9 @@ class Agent(FastAPI):
                     "id": skill_id,
                     "input_schema": InputSchema.model_json_schema(),
                     "tags": tags or [],
+                    "vc_enabled": self._effective_component_vc_setting(
+                        skill_id, self._skill_vc_overrides
+                    ),
                 }
             )
 

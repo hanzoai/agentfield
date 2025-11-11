@@ -25,6 +25,11 @@ class FakeAgent:
         self.skills = []
         self.base_url = "http://agent"
         self._current_status = None
+        self.did_manager = None
+        self.did_enabled = False
+
+    def _build_vc_metadata(self):
+        return {"agent_default": True}
 
 
 def test_start_enters_reconnecting_and_stop_quick(monkeypatch):

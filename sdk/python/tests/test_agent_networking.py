@@ -183,6 +183,49 @@ def test_populate_execution_context_with_did(monkeypatch):
     assert execution.agent_node_did == "did:agent:1"
 
 
+def test_reasoner_and_skill_vc_metadata(monkeypatch):
+    agent, _ = create_test_agent(monkeypatch)
+
+    @agent.reasoner(vc_enabled=False)
+    async def sample_reasoner(text: str) -> dict:
+        return {"text": text}
+
+    @agent.skill(vc_enabled=False)
+    def sample_skill(amount: int) -> int:
+        return amount
+
+    assert agent.reasoners[-1]["vc_enabled"] is False
+    assert agent.skills[-1]["vc_enabled"] is False
+
+
+def test_vc_policy_overrides_precedence(monkeypatch):
+    agent, _ = create_test_agent(monkeypatch, vc_enabled=False)
+    agent.did_enabled = True
+    if agent.vc_generator:
+        agent.vc_generator.set_enabled(True)
+
+    @agent.reasoner(name="critical", vc_enabled=True)
+    async def critical_reasoner(text: str) -> dict:
+        return {"text": text}
+
+    @agent.skill(name="bulk", vc_enabled=True)
+    def bulk_skill(amount: int) -> int:
+        return amount
+
+    assert agent._should_generate_vc(
+        "critical", agent._reasoner_vc_overrides
+    ) is True
+    assert agent._should_generate_vc(
+        "fallback", agent._reasoner_vc_overrides
+    ) is False
+    assert agent._should_generate_vc("bulk", agent._skill_vc_overrides) is True
+
+    metadata = agent._build_vc_metadata()
+    assert metadata["agent_default"] is False
+    assert metadata["reasoner_overrides"]["critical"] is True
+    assert metadata["effective_reasoners"].get("critical") is True
+
+
 @pytest.mark.asyncio
 async def test_on_change_decorator_registers_listener(monkeypatch):
     agent, _ = create_test_agent(monkeypatch)

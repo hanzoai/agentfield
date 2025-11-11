@@ -154,10 +154,28 @@ func runServer(cmd *cobra.Command, args []string) {
 	}
 
 	// Disable execution VC generation if flag is set
-	if noVC, err := cmd.Flags().GetBool("no-vc-execution"); err == nil && noVC {
-		cfg.Features.DID.VCRequirements.RequireVCForExecution = false
-		cfg.Features.DID.VCRequirements.PersistExecutionVC = false
-		fmt.Println("⚠️  Execution VC generation disabled via --no-vc-execution flag")
+	noVCFlag := false
+	if flag := cmd.Flags().Lookup("no-vc-execution"); flag != nil {
+		if noVC, err := cmd.Flags().GetBool("no-vc-execution"); err == nil && noVC {
+			noVCFlag = true
+			cfg.Features.DID.VCRequirements.RequireVCForExecution = false
+			cfg.Features.DID.VCRequirements.PersistExecutionVC = false
+			fmt.Println("⚠️  Execution VC generation disabled via --no-vc-execution flag")
+		}
+	}
+
+	// Explicitly enable VC generation if requested (unless explicitly disabled)
+	if flag := cmd.Flags().Lookup("vc-execution"); flag != nil && flag.Changed {
+		if vcOn, err := cmd.Flags().GetBool("vc-execution"); err == nil && vcOn {
+			if noVCFlag {
+				fmt.Println("⚠️  Ignoring --vc-execution because --no-vc-execution is also set")
+			} else {
+				cfg.Features.DID.Enabled = true
+				cfg.Features.DID.VCRequirements.RequireVCForExecution = true
+				cfg.Features.DID.VCRequirements.PersistExecutionVC = true
+				fmt.Println("✅ Execution VC generation enabled via --vc-execution flag")
+			}
+		}
 	}
 
 	// Build UI if in embedded mode and not in ui-dev mode and UI is not already embedded

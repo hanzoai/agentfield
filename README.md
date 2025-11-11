@@ -121,6 +121,7 @@ curl -X POST http://localhost:8080/api/v1/execute/greeting-agent.say_hello \
 | **Lost context across agent boundaries** - Agent A calls Agent B, you can't trace the full execution; no visibility into multi-agent workflows                                         | **Context propagation built-in** - `workflow_id`, `execution_id`, `session_id` flow automatically through headers; see complete DAG of which agent called which, when, why - distributed tracing without instrumentation            |
 | **Manual state management** - set up Redis/database yourself; handle race conditions; write sync logic for agents to share data                                                        | **Zero-config shared memory fabric** - `await app.memory.set("key", val)` works across distributed agents; hierarchical scopes (workflow/session/actor/global); real-time change events via `@app.memory.on_change("key")`          |
 | **DIY async infrastructure** - implement PostgreSQL queues with `FOR UPDATE SKIP LOCKED`, build webhook delivery with HMAC signing and retries, handle backpressure, graceful shutdown | **Durable execution ships working** - PostgreSQL-backed queues, automatic retries with exponential backoff, HMAC webhook delivery (GitHub-style), fair scheduling, Prometheus metrics, health checks for K8s - no assembly required |
+| **Timeout hell for nested AI calls** - HTTP timeouts kill long-running reasoners; Agent A calls Agent B calls Agent C fails after 60s; build custom async queues and polling infrastructure | **Durable async execution** - reasoners run for hours/days without timeout; nested agent workflows (A→B→C) work natively; async endpoints + webhooks built-in; no external queue infrastructure needed |
 | **Hardcoded integrations** - manually wire up service discovery; build custom REST wrappers for frontend teams; maintain API gateway; coordinate URLs across deployments               | **Auto-discovery + instant APIs** - call any agent via `await app.call("agent.function")`; every `@app.reasoner()` becomes `/api/v1/execute/agent.function` automatically; React/iOS/Android call via HTTP, no SDK needed           |
 
 
@@ -143,7 +144,8 @@ curl -X POST http://localhost:8080/api/v1/execute/greeting-agent.say_hello \
 ## What You Get Out-of-the-Box
 
 🧩 Scale Infrastructure - deploy like microservices
-	•	Durable queues, async webhooks, event streaming
+	•	Durable async execution for long-running & nested AI workflows (hours/days, no timeouts)
+	•	Auto-generated queues, webhooks (HMAC-signed), event streaming
 	•	Auto-discovery & cross-agent calls; context propagation
 	•	Horizontal scaling & many more..!
 

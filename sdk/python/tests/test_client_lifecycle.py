@@ -1,6 +1,7 @@
 import asyncio
 import sys
 import types
+from typing import Any, Dict
 
 from agentfield.client import AgentFieldClient
 from agentfield.types import AgentStatus, HeartbeatData
@@ -64,11 +65,14 @@ def test_register_agent_with_status_async(monkeypatch):
     # Provide a dummy httpx module that AgentFieldClient will use
     from agentfield import client as client_mod
 
+    captured: Dict[str, Any] = {}
+
     class DummyAsyncClient:
         def __init__(self, *args, **kwargs):
             self.is_closed = False
 
         async def request(self, method, url, **kwargs):
+            captured["json"] = kwargs.get("json")
             return DummyResponse(status_code=201, payload={})
 
         async def aclose(self):
@@ -94,9 +98,17 @@ def test_register_agent_with_status_async(monkeypatch):
 
     async def run():
         return await bc.register_agent_with_status(
-            node_id="n1", reasoners=[], skills=[], base_url="http://agent"
+            node_id="n1",
+            reasoners=[],
+            skills=[],
+            base_url="http://agent",
+            vc_metadata={"agent_default": False},
         )
 
     success, payload = asyncio.run(run())
     assert success is True
     assert payload == {}
+    assert (
+        captured["json"]["metadata"]["custom"]["vc_generation"]["agent_default"]
+        is False
+    )

@@ -27,6 +27,7 @@ class DummyAgentFieldClient:
         skills,
         base_url: str,
         discovery=None,
+        vc_metadata=None,
     ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         self.register_calls.append(
             {
@@ -35,9 +36,30 @@ class DummyAgentFieldClient:
                 "skills": skills,
                 "base_url": base_url,
                 "discovery": discovery,
+                "vc_metadata": vc_metadata,
             }
         )
         return True, {"resolved_base_url": base_url}
+
+    async def register_agent_with_status(
+        self,
+        node_id: str,
+        reasoners,
+        skills,
+        base_url: str,
+        status: AgentStatus = AgentStatus.STARTING,
+        discovery=None,
+        suppress_errors: bool = False,
+        vc_metadata=None,
+    ) -> Tuple[bool, Optional[Dict[str, Any]]]:
+        return await self.register_agent(
+            node_id=node_id,
+            reasoners=reasoners,
+            skills=skills,
+            base_url=base_url,
+            discovery=discovery,
+            vc_metadata=vc_metadata,
+        )
 
     async def send_enhanced_heartbeat(
         self, node_id: str, heartbeat: HeartbeatData
@@ -78,6 +100,9 @@ class StubAgent:
     agentfield_connected: bool = True
     _current_status: AgentStatus = AgentStatus.STARTING
     callback_candidates: List[str] = field(default_factory=list)
+
+    def _build_vc_metadata(self):
+        return {"agent_default": True}
 
     def __post_init__(self):
         self._heartbeat_stop_event = threading.Event()
@@ -206,6 +231,7 @@ def create_test_agent(
     node_id: str = "test-agent",
     callback_url: Optional[str] = None,
     dev_mode: bool = False,
+    vc_enabled: Optional[bool] = True,
 ) -> Tuple[Any, DummyAgentFieldClient]:
     """Construct a fully initialized Agent with key dependencies stubbed out.
 
@@ -425,6 +451,7 @@ def create_test_agent(
         version="1.2.3",
         callback_url=callback_url,
         dev_mode=dev_mode,
+        vc_enabled=vc_enabled,
     )
     agent._captured_workflow_events = []
 

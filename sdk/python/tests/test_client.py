@@ -356,8 +356,15 @@ async def test_register_agent(monkeypatch):
     install_httpx_stub(monkeypatch, on_request=on_request)
 
     client = AgentFieldClient(base_url="http://example.com")
-    ok, payload = await client.register_agent("node-1", [], [], base_url="http://agent")
+    metadata = {"agent_default": True, "reasoner_overrides": {"foo": False}}
+    ok, payload = await client.register_agent(
+        "node-1", [], [], base_url="http://agent", vc_metadata=metadata
+    )
     assert ok is True
     assert payload == {}
     assert posted[0][0] == "POST"
     assert posted[0][1].endswith("/nodes/register")
+    body = posted[0][2]
+    assert (
+        body["metadata"]["custom"]["vc_generation"]["reasoner_overrides"]["foo"] is False
+    )

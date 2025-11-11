@@ -14,15 +14,16 @@ import (
 )
 
 var (
-	cfgFile         string
-	verbose         bool
-	openBrowserFlag bool
-	uiDevFlag       bool
-	backendOnlyFlag bool
-	portFlag        int
-	noVCExecution   bool
-	storageModeFlag string
-	postgresURLFlag string
+	cfgFile           string
+	verbose           bool
+	openBrowserFlag   bool
+	uiDevFlag         bool
+	backendOnlyFlag   bool
+	portFlag          int
+	noVCExecution     bool
+	forceVCExecution  bool
+	storageModeFlag   string
+	postgresURLFlag   string
 )
 
 // NewRootCommand creates and returns the root Cobra command for the AgentField CLI.
@@ -71,6 +72,7 @@ func NewRootCommand(runServerFunc func(cmd *cobra.Command, args []string), versi
 	RootCmd.PersistentFlags().BoolVar(&backendOnlyFlag, "backend-only", false, "Run only backend APIs, UI served separately")
 	RootCmd.PersistentFlags().IntVar(&portFlag, "port", 0, "Port for the af server (overrides config if set)")
 	RootCmd.PersistentFlags().BoolVar(&noVCExecution, "no-vc-execution", false, "Disable generating verifiable credentials for executions")
+	RootCmd.PersistentFlags().BoolVar(&forceVCExecution, "vc-execution", false, "Force-enable generating verifiable credentials for executions")
 	RootCmd.PersistentFlags().StringVar(&storageModeFlag, "storage-mode", "", "Override the storage backend (local or postgres)")
 	RootCmd.PersistentFlags().StringVar(&postgresURLFlag, "postgres-url", "", "PostgreSQL connection URL or DSN (implies --storage-mode=postgres)")
 

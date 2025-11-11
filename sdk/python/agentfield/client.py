@@ -326,6 +326,15 @@ class AgentFieldClient:
         response.raise_for_status()  # Raise an exception for bad status codes
         return response.json()
 
+    def _apply_vc_metadata(self, registration_data: Dict[str, Any], vc_metadata: Optional[Dict[str, Any]]) -> None:
+        """Attach VC metadata to the registration payload if supplied."""
+        if not vc_metadata:
+            return
+
+        metadata = registration_data.setdefault("metadata", {})
+        custom_section = metadata.setdefault("custom", {})
+        custom_section["vc_generation"] = vc_metadata
+
     async def register_agent(
         self,
         node_id: str,
@@ -333,6 +342,7 @@ class AgentFieldClient:
         skills: List[dict],
         base_url: str,
         discovery: Optional[Dict[str, Any]] = None,
+        vc_metadata: Optional[Dict[str, Any]] = None,
     ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """Register or update agent information with AgentField server."""
         try:
@@ -373,6 +383,8 @@ class AgentFieldClient:
 
             if discovery:
                 registration_data["callback_discovery"] = discovery
+
+            self._apply_vc_metadata(registration_data, vc_metadata)
 
             response = await self._async_request(
                 "POST",
@@ -808,6 +820,7 @@ class AgentFieldClient:
         status: AgentStatus = AgentStatus.STARTING,
         discovery: Optional[Dict[str, Any]] = None,
         suppress_errors: bool = False,
+        vc_metadata: Optional[Dict[str, Any]] = None,
     ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """Register agent with immediate status reporting for fast lifecycle."""
         try:
@@ -849,6 +862,8 @@ class AgentFieldClient:
 
             if discovery:
                 registration_data["callback_discovery"] = discovery
+
+            self._apply_vc_metadata(registration_data, vc_metadata)
 
             response = await self._async_request(
                 "POST",

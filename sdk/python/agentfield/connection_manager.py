@@ -140,6 +140,7 @@ class ConnectionManager:
                     status=self.agent._current_status,
                     discovery=discovery_payload,
                     suppress_errors=True,  # Suppress verbose error logging for connection attempts
+                    vc_metadata=self.agent._build_vc_metadata(),
                 )
             finally:
                 # Restore original logging levels
@@ -149,6 +150,8 @@ class ConnectionManager:
             if success:
                 if payload:
                     self.agent._apply_discovery_response(payload)
+                if self.agent.did_manager and not self.agent.did_enabled:
+                    self.agent._register_agent_with_did()
                 self.state = ConnectionState.CONNECTED
                 return True
             else:
