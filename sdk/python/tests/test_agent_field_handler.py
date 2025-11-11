@@ -191,7 +191,7 @@ async def test_register_with_agentfield_applies_discovery_payload(monkeypatch):
     agent, agentfield_client = create_test_agent(monkeypatch)
     agent.callback_candidates = []
 
-    async def fake_register(node_id, reasoners, skills, base_url, discovery=None):
+    async def fake_register(node_id, reasoners, skills, base_url, discovery=None, vc_metadata=None):
         return True, {
             "resolved_base_url": "https://public:9000",
             "callback_discovery": {

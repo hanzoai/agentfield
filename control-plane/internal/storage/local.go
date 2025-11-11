@@ -6276,6 +6276,16 @@ func (ls *LocalStorage) ListExecutionVCs(ctx context.Context, filters types.VCFi
 		args = append(args, *filters.Status)
 	}
 
+	// Add time range filtering
+	if filters.CreatedAfter != nil {
+		conditions = append(conditions, "created_at >= ?")
+		args = append(args, filters.CreatedAfter.UTC())
+	}
+	if filters.CreatedBefore != nil {
+		conditions = append(conditions, "created_at <= ?")
+		args = append(args, filters.CreatedBefore.UTC())
+	}
+
 	if len(conditions) > 0 {
 		query += " WHERE " + strings.Join(conditions, " AND ")
 	}
@@ -6283,6 +6293,10 @@ func (ls *LocalStorage) ListExecutionVCs(ctx context.Context, filters types.VCFi
 
 	if filters.Limit > 0 {
 		query += fmt.Sprintf(" LIMIT %d", filters.Limit)
+	}
+
+	if filters.Offset > 0 {
+		query += fmt.Sprintf(" OFFSET %d", filters.Offset)
 	}
 
 	rows, err := ls.db.QueryContext(ctx, query, args...)

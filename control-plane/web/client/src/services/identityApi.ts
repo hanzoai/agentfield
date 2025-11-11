@@ -176,6 +176,8 @@ export async function searchCredentials(filters: {
   session_id?: string;
   status?: string;
   issuer_did?: string;
+  start_time?: string;
+  end_time?: string;
   limit?: number;
   offset?: number;
 }): Promise<{
@@ -191,6 +193,8 @@ export async function searchCredentials(filters: {
   if (filters.session_id) params.append("session_id", filters.session_id);
   if (filters.status) params.append("status", filters.status);
   if (filters.issuer_did) params.append("issuer_did", filters.issuer_did);
+  if (filters.start_time) params.append("start_time", filters.start_time);
+  if (filters.end_time) params.append("end_time", filters.end_time);
   if (filters.limit) params.append("limit", filters.limit.toString());
   if (filters.offset) params.append("offset", filters.offset.toString());
 

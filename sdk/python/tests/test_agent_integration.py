@@ -14,6 +14,10 @@ async def test_agent_reasoner_routing_and_workflow(monkeypatch):
     agent, agentfield_client = create_test_agent(
         monkeypatch, callback_url="https://callback.example.com"
     )
+    # Disable async execution for this test to get synchronous 200 responses
+    agent.async_config.enable_async_execution = False
+    # Disable agentfield_server to prevent async callback execution
+    agent.agentfield_server = None
 
     @agent.reasoner()
     async def double(value: int) -> dict:
@@ -73,6 +77,10 @@ async def test_agent_reasoner_routing_and_workflow(monkeypatch):
 @pytest.mark.asyncio
 async def test_agent_reasoner_custom_name(monkeypatch):
     agent, _ = create_test_agent(monkeypatch)
+    # Disable async execution for this test to get synchronous 200 responses
+    agent.async_config.enable_async_execution = False
+    # Disable agentfield_server to prevent async callback execution
+    agent.agentfield_server = None
 
     @agent.reasoner(name="reports_generate")
     async def generate_report(report_id: str) -> dict:
@@ -101,6 +109,10 @@ async def test_agent_reasoner_custom_name(monkeypatch):
 @pytest.mark.asyncio
 async def test_agent_router_prefix_registration(monkeypatch):
     agent, _ = create_test_agent(monkeypatch)
+    # Disable async execution for this test to get synchronous 200 responses
+    agent.async_config.enable_async_execution = False
+    # Disable agentfield_server to prevent async callback execution
+    agent.agentfield_server = None
 
     quickstart = AgentRouter(prefix="demo")
 

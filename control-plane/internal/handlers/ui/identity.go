@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
@@ -423,6 +424,23 @@ func (h *IdentityHandlers) SearchCredentials(c *gin.Context) {
 
 	if issuerDID := c.Query("issuer_did"); issuerDID != "" {
 		filters.IssuerDID = &issuerDID
+	}
+
+	// Parse time range filters
+	if startTime := c.Query("start_time"); startTime != "" {
+		if t, err := time.Parse(time.RFC3339, startTime); err == nil {
+			filters.CreatedAfter = &t
+		} else {
+			logger.Logger.Warn().Str("start_time", startTime).Err(err).Msg("Failed to parse start_time")
+		}
+	}
+
+	if endTime := c.Query("end_time"); endTime != "" {
+		if t, err := time.Parse(time.RFC3339, endTime); err == nil {
+			filters.CreatedBefore = &t
+		} else {
+			logger.Logger.Warn().Str("end_time", endTime).Err(err).Msg("Failed to parse end_time")
+		}
 	}
 
 	// Query execution VCs
