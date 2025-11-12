@@ -338,8 +338,6 @@ class AgentAI:
             # Use LiteLLM's native Pydantic model support for structured outputs
             litellm_params["response_format"] = schema
 
-        litellm_params["transforms"] = ["middle-out"]
-
         # Define the LiteLLM call function for rate limiter
         async def _make_litellm_call():
             return await litellm.acompletion(**litellm_params)
