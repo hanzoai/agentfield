@@ -1152,14 +1152,12 @@ class Agent(FastAPI):
             for param_name, param in sig.parameters.items():
                 if param_name not in ["self", "execution_context"]:
                     param_type = type_hints.get(param_name, str)
-
-                    # Check if parameter has a default value
-                    if param.default != inspect.Parameter.empty:
-                        # Parameter has default value - make it optional
-                        input_fields[param_name] = (param_type, param.default)
-                    else:
-                        # Parameter is required
-                        input_fields[param_name] = (param_type, ...)
+                    default_value = (
+                        param.default
+                        if param.default is not inspect.Parameter.empty
+                        else ...
+                    )
+                    input_fields[param_name] = (param_type, default_value)
 
             InputSchema = create_model(f"{func_name}Input", **input_fields)
 
@@ -1723,7 +1721,12 @@ class Agent(FastAPI):
             for param_name, param in sig.parameters.items():
                 if param_name not in ["self", "execution_context"]:
                     param_type = type_hints.get(param_name, str)
-                    input_fields[param_name] = (param_type, ...)
+                    default_value = (
+                        param.default
+                        if param.default is not inspect.Parameter.empty
+                        else ...
+                    )
+                    input_fields[param_name] = (param_type, default_value)
 
             InputSchema = create_model(f"{func_name}Input", **input_fields)
 
@@ -1759,7 +1762,30 @@ class Agent(FastAPI):
 
                 # Convert input to function arguments
                 input_payload = input_data.model_dump()
-                kwargs = dict(input_payload)
+
+                # 🔥 NEW: Automatic Pydantic model conversion (FastAPI-like behavior)
+                # Use the original function for type hint inspection
+                original_func = getattr(func, "_original_func", func)
+                try:
+                    if should_convert_args(original_func):
+                        converted_args, converted_kwargs = convert_function_args(
+                            original_func, (), input_payload
+                        )
+                        args = converted_args
+                        kwargs = converted_kwargs
+                    else:
+                        kwargs = dict(input_payload)
+                except ValidationError as e:
+                    # Re-raise validation errors with context
+                    raise ValidationError(
+                        f"Pydantic validation failed for skill '{skill_id}': {e}",
+                        model=getattr(e, "model", None),
+                    ) from e
+                except Exception as e:
+                    # Log conversion errors but continue with original args for backward compatibility
+                    if self.dev_mode:
+                        log_warn(f"Failed to convert arguments for skill '{skill_id}': {e}")
+                    kwargs = dict(input_payload)
 
                 # Inject execution context if the function accepts it
                 if "execution_context" in sig.parameters:
@@ -1780,7 +1806,7 @@ class Agent(FastAPI):
 
                 # 🔥 FIX: Call the original function directly to prevent double tracking
                 # The FastAPI endpoint already handles tracking, so we don't want the tracked wrapper
-                original_func = getattr(func, "_original_func", func)
+                # (original_func already retrieved above for type hint inspection)
                 try:
                     if asyncio.iscoroutinefunction(original_func):
                         result = await original_func(**kwargs)

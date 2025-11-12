@@ -62,6 +62,9 @@ storage:
     cache_size: 1000
     retention_days: 30
     auto_vacuum: true
+  vector:
+    enabled: true
+    distance: "cosine"
 
 features:
   did:

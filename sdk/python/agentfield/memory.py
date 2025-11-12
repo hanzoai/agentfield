@@ -7,10 +7,19 @@ sharing and synchronization across distributed agents.
 
 import asyncio
 import json
-from typing import Any, List, Optional, Union
+from typing import Any, Dict, List, Optional, Sequence, Union
 from .client import AgentFieldClient
 from .execution_context import ExecutionContext
 from .memory_events import MemoryEventClient, ScopedMemoryEventClient
+
+
+def _vector_to_list(values: Union[Sequence[float], Any]) -> List[float]:
+    """
+    Normalize numpy arrays, tuples, or other sequences to a plain float list.
+    """
+    if hasattr(values, "tolist"):
+        values = values.tolist()
+    return [float(x) for x in values]  # type: ignore[arg-type]
 
 
 class MemoryClient:
@@ -97,6 +106,35 @@ class MemoryClient:
         except Exception as e:
             log_debug(f"Memory set failed for key {key}: {type(e).__name__}: {e}")
             raise
+
+    async def set_vector(
+        self,
+        key: str,
+        embedding: Union[Sequence[float], Any],
+        metadata: Optional[Dict[str, Any]] = None,
+        scope: Optional[str] = None,
+    ) -> None:
+        """
+        Store a vector embedding with optional metadata.
+        """
+        headers = self.execution_context.to_headers()
+        payload: Dict[str, Any] = {
+            "key": key,
+            "embedding": _vector_to_list(embedding),
+        }
+        if metadata:
+            payload["metadata"] = metadata
+        if scope:
+            payload["scope"] = scope
+
+        response = await self._async_request(
+            "POST",
+            f"{self.agentfield_client.api_base}/memory/vector/set",
+            json=payload,
+            headers=headers,
+            timeout=15.0,
+        )
+        response.raise_for_status()
 
     async def get(
         self, key: str, default: Any = None, scope: Optional[str] = None
@@ -187,6 +225,23 @@ class MemoryClient:
         )
         response.raise_for_status()
 
+    async def delete_vector(self, key: str, scope: Optional[str] = None) -> None:
+        """
+        Delete a stored vector embedding.
+        """
+        headers = self.execution_context.to_headers()
+        payload: Dict[str, Any] = {"key": key}
+        if scope:
+            payload["scope"] = scope
+        response = await self._async_request(
+            "POST",
+            f"{self.agentfield_client.api_base}/memory/vector/delete",
+            json=payload,
+            headers=headers,
+            timeout=10.0,
+        )
+        response.raise_for_status()
+
     async def list_keys(self, scope: str) -> List[str]:
         """
         List all keys in a specific scope.
@@ -214,6 +269,35 @@ class MemoryClient:
             return [item.get("key", "") for item in result if "key" in item]
 
         return []
+
+    async def similarity_search(
+        self,
+        query_embedding: Union[Sequence[float], Any],
+        top_k: int = 10,
+        scope: Optional[str] = None,
+        filters: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Perform a similarity search against stored vectors.
+        """
+        headers = self.execution_context.to_headers()
+        payload: Dict[str, Any] = {
+            "query_embedding": _vector_to_list(query_embedding),
+            "top_k": top_k,
+            "filters": filters or {},
+        }
+        if scope:
+            payload["scope"] = scope
+
+        response = await self._async_request(
+            "POST",
+            f"{self.agentfield_client.api_base}/memory/vector/search",
+            json=payload,
+            headers=headers,
+            timeout=15.0,
+        )
+        response.raise_for_status()
+        return response.json()
 
 
 class ScopedMemoryClient:
@@ -259,6 +343,27 @@ class ScopedMemoryClient:
     async def list_keys(self) -> List[str]:
         """List all keys in this specific scope."""
         return await self.memory_client.list_keys(self.scope)
+
+    async def set_vector(
+        self, key: str, embedding: Union[Sequence[float], Any], metadata: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """Store a vector within this scope."""
+        await self.memory_client.set_vector(key, embedding, metadata=metadata, scope=self.scope)
+
+    async def delete_vector(self, key: str) -> None:
+        """Delete a vector within this scope."""
+        await self.memory_client.delete_vector(key, scope=self.scope)
+
+    async def similarity_search(
+        self,
+        query_embedding: Union[Sequence[float], Any],
+        top_k: int = 10,
+        filters: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Search vectors within this scope."""
+        return await self.memory_client.similarity_search(
+            query_embedding, top_k=top_k, scope=self.scope, filters=filters
+        )
 
     def on_change(self, patterns: Union[str, List[str]]):
         """
@@ -311,6 +416,27 @@ class GlobalMemoryClient:
         """List all keys in global scope."""
         return await self.memory_client.list_keys("global")
 
+    async def set_vector(
+        self, key: str, embedding: Union[Sequence[float], Any], metadata: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """Store a vector in global scope."""
+        await self.memory_client.set_vector(key, embedding, metadata=metadata, scope="global")
+
+    async def delete_vector(self, key: str) -> None:
+        """Delete a vector in global scope."""
+        await self.memory_client.delete_vector(key, scope="global")
+
+    async def similarity_search(
+        self,
+        query_embedding: Union[Sequence[float], Any],
+        top_k: int = 10,
+        filters: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Search vectors in global scope."""
+        return await self.memory_client.similarity_search(
+            query_embedding, top_k=top_k, scope="global", filters=filters
+        )
+
 
 class MemoryInterface:
     """
@@ -336,6 +462,17 @@ class MemoryInterface:
             data: The data to store
         """
         await self.memory_client.set(key, data)
+
+    async def set_vector(
+        self,
+        key: str,
+        embedding: Union[Sequence[float], Any],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Store a vector embedding with automatic scoping.
+        """
+        await self.memory_client.set_vector(key, embedding, metadata=metadata)
 
     async def get(self, key: str, default: Any = None) -> Any:
         """
@@ -373,6 +510,25 @@ class MemoryInterface:
             key: The memory key
         """
         await self.memory_client.delete(key)
+
+    async def delete_vector(self, key: str) -> None:
+        """
+        Delete a vector embedding from the current scope.
+        """
+        await self.memory_client.delete_vector(key)
+
+    async def similarity_search(
+        self,
+        query_embedding: Union[Sequence[float], Any],
+        top_k: int = 10,
+        filters: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Search stored vectors using similarity matching.
+        """
+        return await self.memory_client.similarity_search(
+            query_embedding, top_k=top_k, filters=filters
+        )
 
     def on_change(self, patterns: Union[str, List[str]]):
         """

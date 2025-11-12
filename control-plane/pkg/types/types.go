@@ -104,6 +104,29 @@ type MemoryMetadata struct {
 	Custom        map[string]interface{} `json:"custom,omitempty"`
 }
 
+// VectorRecord represents a stored vector embedding.
+type VectorRecord struct {
+	Scope     string                 `json:"scope"`
+	ScopeID   string                 `json:"scope_id"`
+	Key       string                 `json:"key"`
+	Embedding []float32              `json:"embedding"`
+	Metadata  map[string]interface{} `json:"metadata"`
+	CreatedAt time.Time              `json:"created_at"`
+	UpdatedAt time.Time              `json:"updated_at"`
+}
+
+// VectorSearchResult represents a similarity search hit.
+type VectorSearchResult struct {
+	Scope     string                 `json:"scope"`
+	ScopeID   string                 `json:"scope_id"`
+	Key       string                 `json:"key"`
+	Score     float64                `json:"score"`
+	Distance  float64                `json:"distance"`
+	Metadata  map[string]interface{} `json:"metadata"`
+	CreatedAt time.Time              `json:"created_at"`
+	UpdatedAt time.Time              `json:"updated_at"`
+}
+
 // EncryptionMetadata holds encryption-related metadata.
 type EncryptionMetadata struct {
 	Encrypted bool   `json:"encrypted"`

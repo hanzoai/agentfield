@@ -1,8 +1,6 @@
-version: "3.9"
-
 services:
   postgres:
-    image: postgres:15-alpine
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_USER: agentfield
@@ -10,7 +8,11 @@ services:
       POSTGRES_DB: agentfield
     volumes:
       - pgdata:/var/lib/postgresql/data
-
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentfield"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   control-plane:
     build:
@@ -24,8 +26,10 @@ services:
       AGENTFIELD_HTTP_ADDR: 0.0.0.0:8080
     ports:
       - "8080:8080"
+    restart: unless-stopped
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
 
 volumes:
   pgdata:

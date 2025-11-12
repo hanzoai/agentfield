@@ -441,6 +441,9 @@ type LocalStorage struct {
 	mode                      string
 	config                    LocalStorageConfig
 	postgresConfig            PostgresStorageConfig
+	vectorConfig              VectorStoreConfig
+	vectorMetric              VectorDistanceMetric
+	vectorStore               vectorStore
 	eventBus                  *events.ExecutionEventBus // Event bus for real-time updates
 	workflowExecutionEventBus *events.EventBus[*types.WorkflowExecutionEvent]
 }
@@ -450,6 +453,7 @@ func NewLocalStorage(config LocalStorageConfig) *LocalStorage {
 	return &LocalStorage{
 		mode:                      "local",
 		config:                    config,
+		vectorMetric:              VectorDistanceCosine,
 		cache:                     &sync.Map{},
 		subscribers:               make(map[string][]chan types.MemoryChangeEvent),
 		eventBus:                  events.NewExecutionEventBus(),
@@ -462,6 +466,7 @@ func NewPostgresStorage(config PostgresStorageConfig) *LocalStorage {
 	return &LocalStorage{
 		mode:                      "postgres",
 		postgresConfig:            config,
+		vectorMetric:              VectorDistanceCosine,
 		cache:                     &sync.Map{},
 		subscribers:               make(map[string][]chan types.MemoryChangeEvent),
 		eventBus:                  events.NewExecutionEventBus(),
@@ -483,6 +488,8 @@ func (ls *LocalStorage) Initialize(ctx context.Context, config StorageConfig) er
 	ls.mode = mode
 	ls.config = config.Local
 	ls.postgresConfig = config.Postgres
+	ls.vectorConfig = config.Vector.normalized()
+	ls.vectorMetric = parseDistanceMetric(ls.vectorConfig.Distance)
 
 	switch mode {
 	case "local":
@@ -840,6 +847,14 @@ func (ls *LocalStorage) createSchema(ctx context.Context) error {
 		if err := ls.runPostgresMigrations(ctx); err != nil {
 			return fmt.Errorf("failed to run postgres migrations: %w", err)
 		}
+		if ls.vectorConfig.isEnabled() {
+			if err := ls.ensureVectorSchema(ctx); err != nil {
+				return err
+			}
+			if err := ls.initializeVectorStore(); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 
@@ -865,6 +880,15 @@ func (ls *LocalStorage) createSchema(ctx context.Context) error {
 
 	if err := ls.ensureSQLiteIndexes(); err != nil {
 		return err
+	}
+
+	if ls.vectorConfig.isEnabled() {
+		if err := ls.ensureVectorSchema(ctx); err != nil {
+			return err
+		}
+		if err := ls.initializeVectorStore(); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -1151,6 +1175,80 @@ func (ls *LocalStorage) ensureSQLiteIndexes() error {
 		}
 	}
 
+	return nil
+}
+
+func (ls *LocalStorage) ensureVectorSchema(ctx context.Context) error {
+	switch ls.mode {
+	case "postgres":
+		return ls.ensurePostgresVectorSchema(ctx)
+	default:
+		return ls.ensureSQLiteVectorSchema()
+	}
+}
+
+func (ls *LocalStorage) ensureSQLiteVectorSchema() error {
+	statements := []string{
+		`CREATE TABLE IF NOT EXISTS memory_vectors (
+			scope TEXT NOT NULL,
+			scope_id TEXT NOT NULL,
+			key TEXT NOT NULL,
+			dimension INTEGER NOT NULL,
+			embedding BLOB NOT NULL,
+			metadata JSON DEFAULT '{}',
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY(scope, scope_id, key)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_memory_vectors_scope ON memory_vectors(scope, scope_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_memory_vectors_updated ON memory_vectors(scope, scope_id, updated_at);`,
+	}
+
+	for _, stmt := range statements {
+		if _, err := ls.db.Exec(stmt); err != nil {
+			return fmt.Errorf("failed to ensure sqlite vector schema: %w", err)
+		}
+	}
+	return nil
+}
+
+func (ls *LocalStorage) ensurePostgresVectorSchema(ctx context.Context) error {
+	statements := []string{
+		`CREATE EXTENSION IF NOT EXISTS vector;`,
+		`CREATE TABLE IF NOT EXISTS memory_vectors (
+			scope TEXT NOT NULL,
+			scope_id TEXT NOT NULL,
+			key TEXT NOT NULL,
+			embedding vector NOT NULL,
+			metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			PRIMARY KEY(scope, scope_id, key)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_memory_vectors_scope ON memory_vectors(scope, scope_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_memory_vectors_metadata ON memory_vectors USING GIN(metadata);`,
+	}
+
+	for _, stmt := range statements {
+		if _, err := ls.db.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("failed to ensure postgres vector schema: %w", err)
+		}
+	}
+	return nil
+}
+
+func (ls *LocalStorage) initializeVectorStore() error {
+	if !ls.vectorConfig.isEnabled() {
+		ls.vectorStore = nil
+		return nil
+	}
+
+	switch ls.mode {
+	case "postgres":
+		ls.vectorStore = newPostgresVectorStore(ls.db, ls.vectorMetric)
+	default:
+		ls.vectorStore = newSQLiteVectorStore(ls.db, ls.vectorMetric)
+	}
 	return nil
 }
 
@@ -3677,6 +3775,49 @@ func (ls *LocalStorage) ListMemory(ctx context.Context, scope, scopeID string) (
 	}
 
 	return memories, nil
+}
+
+func (ls *LocalStorage) requireVectorStore() error {
+	if !ls.vectorConfig.isEnabled() {
+		return fmt.Errorf("vector store is disabled")
+	}
+	if ls.vectorStore == nil {
+		return fmt.Errorf("vector store is not initialized")
+	}
+	return nil
+}
+
+// SetVector stores or updates a vector embedding for the specified scope/key.
+func (ls *LocalStorage) SetVector(ctx context.Context, record *types.VectorRecord) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := ls.requireVectorStore(); err != nil {
+		return err
+	}
+	return ls.vectorStore.Set(ctx, record)
+}
+
+// DeleteVector removes a stored vector embedding.
+func (ls *LocalStorage) DeleteVector(ctx context.Context, scope, scopeID, key string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := ls.requireVectorStore(); err != nil {
+		return err
+	}
+	return ls.vectorStore.Delete(ctx, scope, scopeID, key)
+}
+
+// SimilaritySearch performs a similarity search within a scope using the configured vector backend.
+func (ls *LocalStorage) SimilaritySearch(ctx context.Context, scope, scopeID string, queryEmbedding []float32, topK int, filters map[string]interface{}) ([]*types.VectorSearchResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := ls.requireVectorStore(); err != nil {
+		return nil, err
+	}
+	return ls.vectorStore.Search(ctx, scope, scopeID, queryEmbedding, topK, filters)
 }
 
 func (ls *LocalStorage) setMemoryPostgres(ctx context.Context, memory *types.Memory) error {

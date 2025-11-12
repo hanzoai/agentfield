@@ -140,3 +140,60 @@ class VerifiedAnswer(BaseModel):
 class CompletenessScore(BaseModel):
     """Completeness assessment wrapper"""
     score: float
+
+
+# ============= META-COGNITIVE SCHEMAS =============
+
+class QuerySemantics(BaseModel):
+    """Query understanding for meta-reasoning"""
+    question_type: str  # who_is, what_is, explain, compare, when, why
+    subject_type: str  # person, concept, event, organization, place
+    critical_terms: List[str]  # Must-match terms
+    flexibility: str  # exact_match_required, moderate, broad
+
+
+class PrecisionRequirements(BaseModel):
+    """Match precision needed for this query"""
+    precision_level: str  # exact, high, moderate, broad
+    reasoning: str  # Why this precision (context for later stages)
+
+
+class RetrievalPlan(BaseModel):
+    """Dynamically composed retrieval strategy"""
+    primary_strategy: str  # term_verification, semantic, hybrid
+    validation_required: bool
+    strategy_reasoning: str
+
+
+class MatchQuality(BaseModel):
+    """Self-aware assessment of chunk-query match"""
+    is_relevant: bool
+    quality_score: float  # 0.0-1.0
+    mismatch_reason: str  # Why NOT relevant (or empty if relevant)
+
+
+class DraftAnswerWithEntities(BaseModel):
+    """Draft answer with extracted entities"""
+    answer_text: str
+    mentioned_entities: List[str]  # AI extracts entities from answer
+    answer_confidence: float
+
+
+class DriftAnalysis(BaseModel):
+    """Semantic drift detection between query and answer"""
+    has_entity_substitution: bool
+    substitution_details: str  # "Query: X → Answer: Y"
+    is_answer_valid: bool
+
+
+class AlignmentVerdict(BaseModel):
+    """Final validation: does answer actually answer query?"""
+    is_aligned: bool
+    should_return_answer: bool  # or return "no info found"
+    verdict_reasoning: str
+
+
+class FinalConfidence(BaseModel):
+    """Adaptive confidence calibration"""
+    confidence_score: float
+    confidence_reasoning: str

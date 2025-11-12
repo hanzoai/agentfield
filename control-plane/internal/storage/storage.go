@@ -86,6 +86,9 @@ type StorageProvider interface {
 	GetMemory(ctx context.Context, scope, scopeID, key string) (*types.Memory, error)
 	DeleteMemory(ctx context.Context, scope, scopeID, key string) error
 	ListMemory(ctx context.Context, scope, scopeID string) ([]*types.Memory, error)
+	SetVector(ctx context.Context, record *types.VectorRecord) error
+	DeleteVector(ctx context.Context, scope, scopeID, key string) error
+	SimilaritySearch(ctx context.Context, scope, scopeID string, queryEmbedding []float32, topK int, filters map[string]interface{}) ([]*types.VectorSearchResult, error)
 
 	// Event operations
 	StoreEvent(ctx context.Context, event *types.MemoryChangeEvent) error
@@ -204,6 +207,7 @@ type StorageConfig struct {
 	Mode     string                `yaml:"mode" mapstructure:"mode"`
 	Local    LocalStorageConfig    `yaml:"local" mapstructure:"local"`
 	Postgres PostgresStorageConfig `yaml:"postgres" mapstructure:"postgres"`
+	Vector   VectorStoreConfig     `yaml:"vector" mapstructure:"vector"`
 	Config   interface{}           `yaml:"config" mapstructure:"config"`
 }
 
@@ -232,6 +236,26 @@ type LocalStorageConfig struct {
 	AutoVacuum    bool   `yaml:"auto_vacuum" mapstructure:"auto_vacuum"`
 }
 
+// VectorStoreConfig controls vector storage behavior.
+type VectorStoreConfig struct {
+	Enabled  *bool  `yaml:"enabled" mapstructure:"enabled"`
+	Distance string `yaml:"distance" mapstructure:"distance"`
+}
+
+func (cfg VectorStoreConfig) isEnabled() bool {
+	if cfg.Enabled == nil {
+		return true
+	}
+	return *cfg.Enabled
+}
+
+func (cfg VectorStoreConfig) normalized() VectorStoreConfig {
+	if cfg.Distance == "" {
+		cfg.Distance = "cosine"
+	}
+	return cfg
+}
+
 // StorageFactory is responsible for creating the appropriate storage backend.
 type StorageFactory struct{}
 
@@ -249,14 +273,18 @@ func (sf *StorageFactory) CreateStorage(config StorageConfig) (StorageProvider, 
 		mode = envMode
 	}
 
+	config.Vector = config.Vector.normalized()
+
 	switch mode {
 	case "local":
 		localStorage := NewLocalStorage(config.Local)
+		localStorage.vectorConfig = config.Vector
 		// Pass the full StorageConfig to Initialize
 		if err := localStorage.Initialize(ctx, StorageConfig{
 			Mode:     mode,
 			Local:    config.Local,
 			Postgres: config.Postgres,
+			Vector:   config.Vector,
 			Config:   config.Config,
 		}); err != nil {
 			return nil, nil, fmt.Errorf("failed to initialize local storage: %w", err)
@@ -265,10 +293,12 @@ func (sf *StorageFactory) CreateStorage(config StorageConfig) (StorageProvider, 
 
 	case "postgres":
 		pgStorage := NewPostgresStorage(config.Postgres)
+		pgStorage.vectorConfig = config.Vector
 		if err := pgStorage.Initialize(ctx, StorageConfig{
 			Mode:     mode,
 			Local:    config.Local,
 			Postgres: config.Postgres,
+			Vector:   config.Vector,
 			Config:   config.Config,
 		}); err != nil {
 			return nil, nil, fmt.Errorf("failed to initialize postgres storage: %w", err)

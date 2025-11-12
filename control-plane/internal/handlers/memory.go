@@ -19,6 +19,9 @@ type MemoryStorage interface {
 	DeleteMemory(ctx context.Context, scope, scopeID, key string) error
 	ListMemory(ctx context.Context, scope, scopeID string) ([]*types.Memory, error)
 	StoreEvent(ctx context.Context, event *types.MemoryChangeEvent) error
+	SetVector(ctx context.Context, record *types.VectorRecord) error
+	DeleteVector(ctx context.Context, scope, scopeID, key string) error
+	SimilaritySearch(ctx context.Context, scope, scopeID string, queryEmbedding []float32, topK int, filters map[string]interface{}) ([]*types.VectorSearchResult, error)
 }
 
 // SetMemoryRequest defines the structure for setting a memory value.

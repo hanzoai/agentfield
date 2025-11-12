@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 
 import httpx
@@ -145,6 +146,79 @@ async def test_delete_uses_post_endpoint(memory_client, monkeypatch):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_set_vector_calls_vector_endpoint(memory_client, monkeypatch):
+    captured: dict[str, Any] = {}
+
+    class DummyResponse:
+        def raise_for_status(self):
+            return None
+
+    async def fake_request(method, url, json=None, headers=None, timeout=None):  # type: ignore[override]
+        captured["method"] = method
+        captured["url"] = url
+        captured["json"] = json
+        captured["timeout"] = timeout
+        return DummyResponse()
+
+    monkeypatch.setattr(memory_client, "_async_request", fake_request)
+
+    await memory_client.set_vector("chunk_1", [0.1, 0.2], metadata={"source": "doc"})
+
+    assert captured["url"].endswith("/memory/vector/set")
+    assert captured["json"]["key"] == "chunk_1"  # type: ignore[index]
+    assert captured["json"]["metadata"] == {"source": "doc"}  # type: ignore[index]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_delete_vector_calls_vector_endpoint(memory_client, monkeypatch):
+    captured: dict[str, Any] = {}
+
+    class DummyResponse:
+        def raise_for_status(self):
+            return None
+
+    async def fake_request(method, url, json=None, headers=None, timeout=None):  # type: ignore[override]
+        captured["url"] = url
+        captured["json"] = json
+        return DummyResponse()
+
+    monkeypatch.setattr(memory_client, "_async_request", fake_request)
+
+    await memory_client.delete_vector("chunk_1")
+
+    assert captured["url"].endswith("/memory/vector/delete")
+    assert captured["json"]["key"] == "chunk_1"  # type: ignore[index]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_similarity_search_returns_results(memory_client, monkeypatch):
+    expected = [{"key": "chunk_1", "score": 0.9}]
+
+    class DummyResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    async def fake_request(method, url, json=None, headers=None, timeout=None):  # type: ignore[override]
+        assert json["query_embedding"] == [0.5, 0.2]  # type: ignore[index]
+        assert json["top_k"] == 5  # type: ignore[index]
+        return DummyResponse(expected)
+
+    monkeypatch.setattr(memory_client, "_async_request", fake_request)
+
+    result = await memory_client.similarity_search([0.5, 0.2], top_k=5)
+    assert result == expected
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_list_keys_returns_names(memory_client, monkeypatch):
     class DummyAsyncClient:
         async def __aenter__(self):
@@ -193,6 +267,9 @@ async def test_scoped_client_delegates(memory_client):
     base.exists = AsyncMock(return_value=True)  # type: ignore[assignment]
     base.delete = AsyncMock()  # type: ignore[assignment]
     base.list_keys = AsyncMock(return_value=["a"])  # type: ignore[assignment]
+    base.set_vector = AsyncMock()  # type: ignore[assignment]
+    base.delete_vector = AsyncMock()  # type: ignore[assignment]
+    base.similarity_search = AsyncMock(return_value=[{"key": "chunk"}])  # type: ignore[assignment]
 
     scoped = ScopedMemoryClient(base, scope="session", scope_id="abc")
 
@@ -201,12 +278,18 @@ async def test_scoped_client_delegates(memory_client):
     await scoped.exists("key")
     await scoped.delete("key")
     await scoped.list_keys()
+    await scoped.set_vector("chunk", [0.1])
+    await scoped.delete_vector("chunk")
+    await scoped.similarity_search([0.2])
 
     base.set.assert_awaited_once_with("key", 1, scope="session")
     base.get.assert_awaited_once_with("key", default=None, scope="session")
     base.exists.assert_awaited_once_with("key", scope="session")
     base.delete.assert_awaited_once_with("key", scope="session")
     base.list_keys.assert_awaited_once_with("session")
+    base.set_vector.assert_awaited_once_with("chunk", [0.1], metadata=None, scope="session")
+    base.delete_vector.assert_awaited_once_with("chunk", scope="session")
+    base.similarity_search.assert_awaited_once_with([0.2], top_k=10, scope="session", filters=None)
 
 
 @pytest.mark.unit
@@ -218,6 +301,9 @@ async def test_global_client_delegates(memory_client):
     base.exists = AsyncMock(return_value=True)  # type: ignore[assignment]
     base.delete = AsyncMock()  # type: ignore[assignment]
     base.list_keys = AsyncMock(return_value=["g"])  # type: ignore[assignment]
+    base.set_vector = AsyncMock()  # type: ignore[assignment]
+    base.delete_vector = AsyncMock()  # type: ignore[assignment]
+    base.similarity_search = AsyncMock(return_value=[{"key": "chunk"}])  # type: ignore[assignment]
 
     global_client = GlobalMemoryClient(base)
 
@@ -226,12 +312,18 @@ async def test_global_client_delegates(memory_client):
     await global_client.exists("key")
     await global_client.delete("key")
     await global_client.list_keys()
+    await global_client.set_vector("chunk", [0.2])
+    await global_client.delete_vector("chunk")
+    await global_client.similarity_search([0.3])
 
     base.set.assert_awaited_once_with("key", 1, scope="global")
     base.get.assert_awaited_once_with("key", default=None, scope="global")
     base.exists.assert_awaited_once_with("key", scope="global")
     base.delete.assert_awaited_once_with("key", scope="global")
     base.list_keys.assert_awaited_once_with("global")
+    base.set_vector.assert_awaited_once_with("chunk", [0.2], metadata=None, scope="global")
+    base.delete_vector.assert_awaited_once_with("chunk", scope="global")
+    base.similarity_search.assert_awaited_once_with([0.3], top_k=10, scope="global", filters=None)
 
 
 @pytest.mark.unit
@@ -242,6 +334,9 @@ async def test_memory_interface_uses_underlying_client(memory_client):
     base.get = AsyncMock(return_value={})  # type: ignore[assignment]
     base.exists = AsyncMock(return_value=False)  # type: ignore[assignment]
     base.delete = AsyncMock()  # type: ignore[assignment]
+    base.set_vector = AsyncMock()  # type: ignore[assignment]
+    base.delete_vector = AsyncMock()  # type: ignore[assignment]
+    base.similarity_search = AsyncMock(return_value=[])  # type: ignore[assignment]
 
     events = SimpleNamespace()
     interface = MemoryInterface(base, events)  # type: ignore[arg-type]
@@ -250,11 +345,17 @@ async def test_memory_interface_uses_underlying_client(memory_client):
     await interface.get("key")
     await interface.exists("key")
     await interface.delete("key")
+    await interface.set_vector("chunk", [0.4])
+    await interface.delete_vector("chunk")
+    await interface.similarity_search([0.4])
 
     base.set.assert_awaited_once_with("key", 1)
     base.get.assert_awaited_once_with("key", default=None)
     base.exists.assert_awaited_once_with("key")
     base.delete.assert_awaited_once_with("key")
+    base.set_vector.assert_awaited_once_with("chunk", [0.4], metadata=None)
+    base.delete_vector.assert_awaited_once_with("chunk")
+    base.similarity_search.assert_awaited_once_with([0.4], top_k=10, filters=None)
     assert interface.events is events
 
 

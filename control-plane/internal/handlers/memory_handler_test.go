@@ -88,6 +88,18 @@ func (m *memoryStorageStub) StoreEvent(ctx context.Context, event *types.MemoryC
 	return nil
 }
 
+func (m *memoryStorageStub) SetVector(ctx context.Context, record *types.VectorRecord) error {
+	return nil
+}
+
+func (m *memoryStorageStub) DeleteVector(ctx context.Context, scope, scopeID, key string) error {
+	return nil
+}
+
+func (m *memoryStorageStub) SimilaritySearch(ctx context.Context, scope, scopeID string, queryEmbedding []float32, topK int, filters map[string]interface{}) ([]*types.VectorSearchResult, error) {
+	return []*types.VectorSearchResult{}, nil
+}
+
 func TestSetMemoryHandler_StoresMemoryAndEvent(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

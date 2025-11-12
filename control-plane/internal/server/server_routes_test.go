@@ -134,7 +134,9 @@ func (s *stubStorage) GetWorkflow(ctx context.Context, workflowID string) (*type
 func (s *stubStorage) QueryWorkflows(ctx context.Context, filters types.WorkflowFilters) ([]*types.Workflow, error) {
 	return nil, nil
 }
-func (s *stubStorage) CreateOrUpdateSession(ctx context.Context, session *types.Session) error { return nil }
+func (s *stubStorage) CreateOrUpdateSession(ctx context.Context, session *types.Session) error {
+	return nil
+}
 func (s *stubStorage) GetSession(ctx context.Context, sessionID string) (*types.Session, error) {
 	return nil, nil
 }
@@ -151,9 +153,16 @@ func (s *stubStorage) DeleteMemory(ctx context.Context, scope, scopeID, key stri
 func (s *stubStorage) ListMemory(ctx context.Context, scope, scopeID string) ([]*types.Memory, error) {
 	return nil, nil
 }
+func (s *stubStorage) SetVector(ctx context.Context, record *types.VectorRecord) error    { return nil }
+func (s *stubStorage) DeleteVector(ctx context.Context, scope, scopeID, key string) error { return nil }
+func (s *stubStorage) SimilaritySearch(ctx context.Context, scope, scopeID string, queryEmbedding []float32, topK int, filters map[string]interface{}) ([]*types.VectorSearchResult, error) {
+	return nil, nil
+}
 
 // Event operations
-func (s *stubStorage) StoreEvent(ctx context.Context, event *types.MemoryChangeEvent) error { return nil }
+func (s *stubStorage) StoreEvent(ctx context.Context, event *types.MemoryChangeEvent) error {
+	return nil
+}
 func (s *stubStorage) GetEventHistory(ctx context.Context, filter types.EventFilter) ([]*types.MemoryChangeEvent, error) {
 	return nil, nil
 }
@@ -162,7 +171,7 @@ func (s *stubStorage) GetEventHistory(ctx context.Context, filter types.EventFil
 func (s *stubStorage) AcquireLock(ctx context.Context, key string, timeout time.Duration) (*types.DistributedLock, error) {
 	return nil, nil
 }
-func (s *stubStorage) ReleaseLock(ctx context.Context, lockID string) error           { return nil }
+func (s *stubStorage) ReleaseLock(ctx context.Context, lockID string) error { return nil }
 func (s *stubStorage) RenewLock(ctx context.Context, lockID string) (*types.DistributedLock, error) {
 	return nil, nil
 }
@@ -223,15 +232,19 @@ func (s *stubStorage) ValidateAgentConfiguration(ctx context.Context, agentID, p
 }
 
 // Agent Package Management
-func (s *stubStorage) StoreAgentPackage(ctx context.Context, pkg *types.AgentPackage) error { return nil }
+func (s *stubStorage) StoreAgentPackage(ctx context.Context, pkg *types.AgentPackage) error {
+	return nil
+}
 func (s *stubStorage) GetAgentPackage(ctx context.Context, packageID string) (*types.AgentPackage, error) {
 	return nil, nil
 }
 func (s *stubStorage) QueryAgentPackages(ctx context.Context, filters types.PackageFilters) ([]*types.AgentPackage, error) {
 	return nil, nil
 }
-func (s *stubStorage) UpdateAgentPackage(ctx context.Context, pkg *types.AgentPackage) error { return nil }
-func (s *stubStorage) DeleteAgentPackage(ctx context.Context, packageID string) error         { return nil }
+func (s *stubStorage) UpdateAgentPackage(ctx context.Context, pkg *types.AgentPackage) error {
+	return nil
+}
+func (s *stubStorage) DeleteAgentPackage(ctx context.Context, packageID string) error { return nil }
 
 // Real-time features
 func (s *stubStorage) SubscribeToMemoryChanges(ctx context.Context, scope, scopeID string) (<-chan types.MemoryChangeEvent, error) {
@@ -251,7 +264,9 @@ func (s *stubStorage) StoreDID(ctx context.Context, did string, didDocument, pub
 func (s *stubStorage) GetDID(ctx context.Context, did string) (*types.DIDRegistryEntry, error) {
 	return nil, nil
 }
-func (s *stubStorage) ListDIDs(ctx context.Context) ([]*types.DIDRegistryEntry, error) { return nil, nil }
+func (s *stubStorage) ListDIDs(ctx context.Context) ([]*types.DIDRegistryEntry, error) {
+	return nil, nil
+}
 
 // AgentField Server DID operations
 func (s *stubStorage) StoreAgentFieldServerDID(ctx context.Context, agentfieldServerID, rootDID string, masterSeed []byte, createdAt, lastKeyRotation time.Time) error {
@@ -271,7 +286,9 @@ func (s *stubStorage) StoreAgentDID(ctx context.Context, agentID, agentDID, agen
 func (s *stubStorage) GetAgentDID(ctx context.Context, agentID string) (*types.AgentDIDInfo, error) {
 	return nil, nil
 }
-func (s *stubStorage) ListAgentDIDs(ctx context.Context) ([]*types.AgentDIDInfo, error) { return nil, nil }
+func (s *stubStorage) ListAgentDIDs(ctx context.Context) ([]*types.AgentDIDInfo, error) {
+	return nil, nil
+}
 
 // Component DID operations
 func (s *stubStorage) StoreComponentDID(ctx context.Context, componentID, componentDID, agentDID, componentType, componentName string, derivationIndex int) error {

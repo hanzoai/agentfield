@@ -147,19 +147,19 @@ class AIConfig(BaseModel):
         default="gpt-4o",
         description="Default LLM model to use (e.g., 'gpt-4o', 'claude-3-sonnet').",
     )
-    temperature: float = Field(
-        default=0.7, ge=0.0, le=2.0, description="Creativity level (0.0-2.0)."
+    temperature: Optional[float] = Field(
+        default=None, ge=0.0, le=2.0, description="Creativity level (0.0-2.0). If None, uses model's default."
     )
     max_tokens: Optional[int] = Field(
-        default=None, description="Maximum response length."
+        default=None, description="Maximum response length. If None, uses model's default."
     )
-    top_p: float = Field(
-        default=1.0,
+    top_p: Optional[float] = Field(
+        default=None,
         ge=0.0,
         le=1.0,
-        description="Controls diversity via nucleus sampling.",
+        description="Controls diversity via nucleus sampling. If None, uses model's default.",
     )
-    stream: bool = Field(default=False, description="Enable streaming response.")
+    stream: Optional[bool] = Field(default=None, description="Enable streaming response. If None, uses model's default.")
     response_format: Literal["auto", "json", "text"] = Field(
         default="auto", description="Desired response format."
     )
@@ -180,9 +180,9 @@ class AIConfig(BaseModel):
     )
 
     # Behavior settings
-    timeout: int = Field(default=60, description="Timeout for AI calls in seconds.")
-    retry_attempts: int = Field(
-        default=3, description="Number of retry attempts for failed AI calls."
+    timeout: Optional[int] = Field(default=None, description="Timeout for AI calls in seconds. If None, uses LiteLLM's default.")
+    retry_attempts: Optional[int] = Field(
+        default=None, description="Number of retry attempts for failed AI calls. If None, uses LiteLLM's default."
     )
     retry_delay: float = Field(
         default=1.0, description="Delay between retries in seconds."
@@ -441,39 +441,16 @@ class AIConfig(BaseModel):
         # Apply runtime overrides (highest priority)
         params.update(overrides)
 
-        # Smart max_tokens calculation if messages provided and not explicitly set
-        if messages and "max_tokens" not in overrides and not self.max_tokens:
-            target_model = params.get("model", self.model)
-            if target_model in self.model_limits_cache:
-                limits = self.model_limits_cache[target_model]
-                max_ctx = limits["context_length"]
-                max_out = limits["max_output_tokens"]
-
-                # Estimate prompt tokens from character count
-                prompt_text = ""
-                for msg in messages:
-                    if isinstance(msg.get("content"), str):
-                        prompt_text += msg["content"]
-                    elif isinstance(msg.get("content"), list):
-                        for item in msg["content"]:
-                            if isinstance(item, dict) and item.get("type") == "text":
-                                prompt_text += item.get("text", "")
-
-                estimated_prompt_tokens = len(prompt_text) // self.avg_chars_per_token
-
-                # Calculate safe max_tokens
-                if max_out:
-                    safe_max_tokens = min(
-                        max_out, max_ctx - estimated_prompt_tokens - 100
-                    )  # 100 token buffer
-                else:
-                    safe_max_tokens = max_ctx - estimated_prompt_tokens - 100
-
-                if safe_max_tokens > 0:
-                    params["max_tokens"] = safe_max_tokens
-
         # Remove None values
-        return {k: v for k, v in params.items() if v is not None}
+        params = {k: v for k, v in params.items() if v is not None}
+
+        # OpenAI Responses API expects max_completion_tokens instead of max_tokens
+        model_name = params.get("model") or self.model
+        provider = model_name.split("/", 1)[0] if model_name and "/" in model_name else None
+        if provider == "openai" and "max_tokens" in params:
+            params["max_completion_tokens"] = params.pop("max_tokens")
+
+        return params
 
     def copy(
         self,
