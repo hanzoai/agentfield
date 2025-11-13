@@ -1768,10 +1768,9 @@ class Agent(FastAPI):
                 original_func = getattr(func, "_original_func", func)
                 try:
                     if should_convert_args(original_func):
-                        converted_args, converted_kwargs = convert_function_args(
+                        _converted_args, converted_kwargs = convert_function_args(
                             original_func, (), input_payload
                         )
-                        args = converted_args
                         kwargs = converted_kwargs
                     else:
                         kwargs = dict(input_payload)

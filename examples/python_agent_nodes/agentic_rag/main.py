@@ -31,10 +31,9 @@ Key Innovation: Hallucination Prevention Through Meta-Cognition
 
 import os
 import asyncio
-from typing import List, Dict, Optional
+from typing import List, Dict
 from agentfield import Agent, AIConfig
 from schemas import (
-    QueryAnalysis,
     SubQuestion,
     SubQuestions,
     DraftAnswer,
@@ -71,7 +70,6 @@ from skills import (
     deduplicate_chunks,
     embed_text,
     embed_batch,
-    rank_by_similarity,
 )
 
 # Initialize agent

@@ -24,7 +24,7 @@ from routers import (
 
 app = Agent(
     node_id="documentation-chatbot",
-    agentfield_server="http://localhost:8080",
+    agentfield_server=f"{os.getenv('AGENTFIELD_SERVER')}",
     ai_config=AIConfig(
         model=os.getenv("AI_MODEL", "openrouter/openai/gpt-4o-mini"),
     ),
@@ -64,4 +64,8 @@ if __name__ == "__main__":
     print("  - Max 1 refinement iteration (prevents loops)")
     print("  - Document-level context (full pages vs isolated chunks)")
     print("  - Smart document ranking (frequency + relevance scoring)")
-    app.run(auto_port=True)
+    port_env = os.getenv("PORT")
+    if port_env is None:
+        app.run(auto_port=True, host="::")
+    else:
+        app.run(port=int(port_env), host="::")

@@ -4,9 +4,8 @@ These are non-AI functions for data processing
 """
 import hashlib
 import re
-from typing import List, Dict, Optional
+from typing import List, Dict
 import numpy as np
-from schemas import Chunk
 from embedding_manager import get_embedding_manager
 
 

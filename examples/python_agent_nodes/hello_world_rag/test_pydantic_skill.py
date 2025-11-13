@@ -45,7 +45,7 @@ async def ingest_with_model(request: IngestRequest) -> IngestResult:
     - Clear schema definition
     - FastAPI-like developer experience
     """
-    print(f"✅ Pydantic model approach:")
+    print("✅ Pydantic model approach:")
     print(f"   Type: {type(request)}")
     print(f"   document_id: {request.document_id}")
     print(f"   path: {request.path}")
@@ -76,7 +76,7 @@ async def ingest_with_params(
     - No need to define models for simple cases
     - Backward compatible with existing code
     """
-    print(f"✅ Plain parameters approach:")
+    print("✅ Plain parameters approach:")
     print(f"   document_id: {document_id}")
     print(f"   path: {path}")
     print(f"   text: {text}")

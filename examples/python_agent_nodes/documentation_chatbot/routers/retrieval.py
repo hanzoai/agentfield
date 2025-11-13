@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Dict, List
+from typing import List
 
 from agentfield import AgentRouter
 from agentfield.logger import log_info

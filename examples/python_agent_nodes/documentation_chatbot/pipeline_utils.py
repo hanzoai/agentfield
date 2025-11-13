@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any, Dict, Iterable, List, Sequence
+from typing import Dict, Iterable, List, Sequence
 
 from agentfield.logger import log_info
 

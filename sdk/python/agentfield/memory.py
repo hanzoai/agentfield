@@ -217,7 +217,7 @@ class MemoryClient:
             payload["scope"] = scope
 
         response = await self._async_request(
-            "POST",
+            "DELETE",
             f"{self.agentfield_client.api_base}/memory/delete",
             json=payload,
             headers=headers,
@@ -234,7 +234,7 @@ class MemoryClient:
         if scope:
             payload["scope"] = scope
         response = await self._async_request(
-            "POST",
+            "DELETE",
             f"{self.agentfield_client.api_base}/memory/vector/delete",
             json=payload,
             headers=headers,

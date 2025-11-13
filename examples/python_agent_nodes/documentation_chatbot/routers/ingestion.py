@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List
 
 from agentfield import AgentRouter
 from agentfield.logger import log_info
