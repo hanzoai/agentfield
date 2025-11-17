@@ -901,7 +901,15 @@ class AgentAI:
     ) -> Any:
         """
         Generate audio using OpenAI client directly with streaming response.
-        This method supports the 'instructions' parameter that LiteLLM doesn't support.
+        This method supports OpenAI-specific parameters like 'instructions' and 'speed'.
+
+        All kwargs are passed through to OpenAI SDK. The SDK will validate parameters
+        and reject unsupported ones.
+
+        Common OpenAI parameters:
+        - instructions: Guide the model's speaking style
+        - speed: Speech speed (0.25 to 4.0)
+        - response_format: Audio format (mp3, opus, aac, flac, wav, pcm)
         """
         import base64
         import tempfile
@@ -926,34 +934,20 @@ class AgentAI:
             # Initialize OpenAI client
             client = OpenAI(api_key=api_key)
 
-            # Prepare parameters for OpenAI speech API
+            # Prepare base parameters for OpenAI speech API
             speech_params = {
                 "model": model,
                 "voice": voice,
                 "input": text_input,
             }
 
-            # Add instructions if provided in kwargs
-            if "instructions" in kwargs:
-                speech_params["instructions"] = kwargs["instructions"]
-
-            # Add speed parameter if provided and is a valid float
-            if "speed" in kwargs:
-                try:
-                    speech_params["speed"] = float(kwargs["speed"])
-                except (ValueError, TypeError):
-                    pass  # Skip invalid speed values
-
-            # Handle format parameter (map to response_format)
-            # Only use supported formats
-            supported_formats = ["mp3", "opus", "aac", "flac", "wav", "pcm"]
-            if format and format in supported_formats:
+            # Map format parameter to response_format if not already in kwargs
+            if "response_format" not in kwargs and format:
                 speech_params["response_format"] = format
-            elif (
-                "response_format" in kwargs
-                and kwargs["response_format"] in supported_formats
-            ):
-                speech_params["response_format"] = kwargs["response_format"]
+
+            # Pass all kwargs through to OpenAI SDK
+            # Let OpenAI SDK handle parameter validation
+            speech_params.update(kwargs)
 
             # Create a temporary file for the audio
             with tempfile.NamedTemporaryFile(
@@ -1008,63 +1002,72 @@ class AgentAI:
         quality: str = "standard",
         style: Optional[str] = None,
         model: Optional[str] = None,
+        response_format: str = "url",
         **kwargs,
     ) -> Any:
         """
         AI method optimized for image generation.
+
+        Supports both LiteLLM and OpenRouter providers:
+        - LiteLLM: Use model names like "dall-e-3", "azure/dall-e-3", "bedrock/stability.stable-diffusion-xl"
+        - OpenRouter: Use model names with "openrouter/" prefix like "openrouter/google/gemini-2.5-flash-image-preview"
 
         Args:
             prompt: Text prompt for image generation
             size: Image size (256x256, 512x512, 1024x1024, 1792x1024, 1024x1792)
             quality: Image quality (standard, hd)
             style: Image style (vivid, natural) for DALL-E 3
-            model: Model to use (defaults to image generation model)
-            **kwargs: Additional parameters
+            model: Model to use (defaults to dall-e-3)
+            response_format: Response format ('url' or 'b64_json'). Defaults to 'url'
+            **kwargs: Additional provider-specific parameters
 
         Returns:
             MultimodalResponse with image content
 
-        Example:
-            image_result = await agent.ai_with_vision("A sunset over mountains", size="1024x1024")
-            image_result.images[0].save("sunset.png")
-        """
-        try:
-            import litellm
-        except ImportError:
-            raise ImportError(
-                "litellm is not installed. Please install it with `pip install litellm`."
+        Examples:
+            # LiteLLM (DALL-E)
+            result = await agent.ai_with_vision("A sunset over mountains")
+            result.images[0].save("sunset.png")
+
+            # OpenRouter (Gemini)
+            result = await agent.ai_with_vision(
+                "A futuristic city",
+                model="openrouter/google/gemini-2.5-flash-image-preview",
+                image_config={"aspect_ratio": "16:9"}
             )
+
+            # Get base64 data directly
+            result = await agent.ai_with_vision("A sunset", response_format="b64_json")
+        """
+        from agentfield import vision
 
         # Use image generation model if not specified
         if model is None:
             model = "dall-e-3"  # Default image model
 
-        # Prepare image generation parameters
-        image_params = {
-            "prompt": prompt,
-            "model": model,
-            "size": size,
-            "quality": quality,
-            "response_format": "url",  # Can be 'url' or 'b64_json'
-            **kwargs,
-        }
-
-        if style and model == "dall-e-3":
-            image_params["style"] = style
-
-        try:
-            # Use LiteLLM's image generation function
-            response = await litellm.aimage_generation(**image_params)
-
-            # Import multimodal response detection
-            from agentfield.multimodal_response import detect_multimodal_response
-
-            # Detect and wrap multimodal content
-            return detect_multimodal_response(response)
-
-        except Exception as e:
-            log_error(f"Image generation failed: {e}")
-            raise
+        # Route based on model prefix
+        if model.startswith("openrouter/"):
+            # OpenRouter: Use chat completions API with image modality
+            return await vision.generate_image_openrouter(
+                prompt=prompt,
+                model=model,
+                size=size,
+                quality=quality,
+                style=style,
+                response_format=response_format,
+                **kwargs,
+            )
+        else:
+            # LiteLLM: Use image generation API
+            return await vision.generate_image_litellm(
+                prompt=prompt,
+                model=model,
+                size=size,
+                quality=quality,
+                style=style,
+                response_format=response_format,
+                **kwargs,
+            )
 
     async def ai_with_multimodal(
         self,

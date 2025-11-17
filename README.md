@@ -37,7 +37,7 @@ Every agent gets **REST/gRPC APIs**, **async execution & webhooks**, **built-in 
 ✅ **Run anywhere**: local dev, Docker, Kubernetes, cloud
 
 ```bash
-curl -fsSL https://agentfield.ai/install.sh | bash && af init my-agents
+curl -fsSL https://agentfield.ai/install.sh | bash && af init my-agent --defaults
 ```
 
 **[📚 Full Docs](https://agentfield.ai/docs)** • **[⚡ Quick Start](https://agentfield.ai/docs/quick-start)** • **[🎯 Examples](https://github.com/agentfield/agentfield-examples)**
@@ -53,7 +53,7 @@ curl -fsSL https://agentfield.ai/install.sh | bash && af init my-agents
 curl -fsSL https://agentfield.ai/install.sh | bash
 
 # Start control plane + create your first agent
-af init my-agents && cd my-agents
+af init my-agent --defaults && cd my-agent
 af run
 ```
 

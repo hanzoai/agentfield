@@ -197,6 +197,7 @@ func NewInitCommand() *cobra.Command {
 	var authorEmail string
 	var language string
 	var nonInteractive bool
+	var useDefaults bool
 
 	cmd := &cobra.Command{
 		Use:   "init [project-name]",
@@ -214,10 +215,15 @@ Example:
   af init                    # Interactive mode
   af init my-new-agent       # With project name
   af init my-agent --language python
+  af init my-agent --defaults # Use defaults with no prompts
   af init my-agent -l go --author "John Doe" --email "john@example.com"`,
 		Args: cobra.MaximumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			var projectName string
+
+			if useDefaults {
+				nonInteractive = true
+			}
 
 			// Get project name from args or interactively
 			if len(args) > 0 {
@@ -412,6 +418,7 @@ Example:
 	cmd.Flags().StringVarP(&authorName, "author", "a", "", "Author name for the project")
 	cmd.Flags().StringVarP(&authorEmail, "email", "e", "", "Author email for the project")
 	cmd.Flags().BoolVar(&nonInteractive, "non-interactive", false, "Run in non-interactive mode (use defaults)")
+	cmd.Flags().BoolVar(&useDefaults, "defaults", false, "Skip prompts and generate a project with default settings")
 
 	if err := viper.BindPFlag("language", cmd.Flags().Lookup("language")); err != nil {
 		printError("failed to bind language flag: %v", err)

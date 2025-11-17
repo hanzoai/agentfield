@@ -3,6 +3,8 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 from enum import Enum
 
+from . import litellm_adapters
+
 
 class AgentStatus(str, Enum):
     """Agent lifecycle status enum matching the Go backend"""
@@ -410,6 +412,11 @@ class AIConfig(BaseModel):
         """
         Get parameters formatted for LiteLLM, with runtime overrides and smart token management.
         LiteLLM handles environment variable detection automatically.
+
+        Only explicitly set parameters are included. LiteLLM will use its own defaults
+        for parameters not provided, ensuring compatibility with all supported models.
+
+        Provider-specific parameter transformations are applied via litellm_adapters module.
         """
         params = {
             "model": self.model,
@@ -441,14 +448,12 @@ class AIConfig(BaseModel):
         # Apply runtime overrides (highest priority)
         params.update(overrides)
 
-        # Remove None values
-        params = {k: v for k, v in params.items() if v is not None}
+        # Remove None values - only pass explicitly set parameters to LiteLLM
+        params = litellm_adapters.filter_none_values(params)
 
-        # OpenAI Responses API expects max_completion_tokens instead of max_tokens
+        # Apply provider-specific parameter patches (e.g., OpenAI max_tokens mapping)
         model_name = params.get("model") or self.model
-        provider = model_name.split("/", 1)[0] if model_name and "/" in model_name else None
-        if provider == "openai" and "max_tokens" in params:
-            params["max_completion_tokens"] = params.pop("max_tokens")
+        params = litellm_adapters.apply_provider_patches(params, model_name)
 
         return params
 
