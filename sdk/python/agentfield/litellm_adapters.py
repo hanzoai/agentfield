@@ -13,8 +13,7 @@ This abstraction allows the core SDK to remain clean while handling necessary
 provider-specific quirks in one maintainable location.
 """
 
-from typing import Dict, Any, Optional
-import re
+from typing import Dict, Any
 
 
 def get_provider_from_model(model: str) -> str:

@@ -122,7 +122,7 @@ async def generate_artwork(
     print(f"✨ Prompt: {prompt_result.prompt}")
 
     image_result = await generate_image(prompt_result.prompt, size=size, model=model)
-    print(f"✅ Image URL ready")
+    print("✅ Image URL ready")
     return {
         "image_url": image_result.image_url,
         "prompt": prompt_result.prompt,
