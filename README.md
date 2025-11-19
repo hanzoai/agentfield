@@ -19,7 +19,7 @@
 
 > **👋 Welcome Early Adopter!**
 >
-> You've discovered AgentField before our official launch. We're currently in private beta, building the infrastructure for the next generation of software. We'd love your feedback via [GitHub Issues](https://github.com/Agent-Field/agentfield/issues).
+> You've discovered AgentField before our official launch. We're currently in private beta, gathering feedback from early users to shape the future of the autonomous software. Feel free to explore and test, and we'd love to hear your thoughts! Share feedback via [GitHub Issues](https://github.com/Agent-Field/agentfield/issues) or email us at contact@agentfield.ai. Please note that features and APIs are still being refined before our public release.
 
 ---
 
@@ -29,7 +29,6 @@
 
 It is an open-source **Control Plane** that treats AI agents as first-class citizens. Instead of building fragile, monolithic scripts, AgentField lets you deploy agents as **independent microservices** that can discover each other, coordinate complex workflows, and scale infinitely—all with built-in observability and cryptographic trust.
 
-### The "Aha!" Moment
 
 Write standard Python (or Go). Get a production-grade distributed system automatically.
 
