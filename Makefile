@@ -56,7 +56,7 @@ test-functional-local:
 		exit 1; \
 	fi
 	cd tests/functional && \
-		docker-compose -f docker/docker-compose.local.yml up --build --abort-on-container-exit --exit-code-from test-runner
+		docker compose -f docker/docker-compose.local.yml up --build --abort-on-container-exit --exit-code-from test-runner
 	$(MAKE) test-functional-cleanup-local
 
 test-functional-postgres:
@@ -68,18 +68,18 @@ test-functional-postgres:
 		exit 1; \
 	fi
 	cd tests/functional && \
-		docker-compose -f docker/docker-compose.postgres.yml up --build --abort-on-container-exit --exit-code-from test-runner
+		docker compose -f docker/docker-compose.postgres.yml up --build --abort-on-container-exit --exit-code-from test-runner
 	$(MAKE) test-functional-cleanup-postgres
 
 test-functional-cleanup: test-functional-cleanup-local test-functional-cleanup-postgres
 
 test-functional-cleanup-local:
 	@echo "🧹 Cleaning up local test environment..."
-	cd tests/functional && docker-compose -f docker/docker-compose.local.yml down -v 2>/dev/null || true
+	cd tests/functional && docker compose -f docker/docker-compose.local.yml down -v 2>/dev/null || true
 
 test-functional-cleanup-postgres:
 	@echo "🧹 Cleaning up postgres test environment..."
-	cd tests/functional && docker-compose -f docker/docker-compose.postgres.yml down -v 2>/dev/null || true
+	cd tests/functional && docker compose -f docker/docker-compose.postgres.yml down -v 2>/dev/null || true
 
 test-functional-ci:
 	@echo "🧪 Running functional tests in CI mode..."

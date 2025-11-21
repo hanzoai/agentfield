@@ -69,12 +69,12 @@ jobs:
         run: |
           cd tests/functional
           if [ "${{ matrix.storage_mode }}" = "local" ]; then
-            docker-compose -f docker/docker-compose.local.yml up \
+            docker compose -f docker/docker-compose.local.yml up \
               --build \
               --abort-on-container-exit \
               --exit-code-from test-runner
           else
-            docker-compose -f docker/docker-compose.postgres.yml up \
+            docker compose -f docker/docker-compose.postgres.yml up \
               --build \
               --abort-on-container-exit \
               --exit-code-from test-runner
@@ -108,7 +108,7 @@ jobs:
         run: |
           mkdir -p logs
           cd tests/functional
-          docker-compose -f docker/docker-compose.${{ matrix.storage_mode }}.yml logs > ../../logs/docker-${{ matrix.storage_mode }}.log || true
+          docker compose -f docker/docker-compose.${{ matrix.storage_mode }}.yml logs > ../../logs/docker-${{ matrix.storage_mode }}.log || true
       
       - name: Upload failure logs
         if: failure()
@@ -122,7 +122,7 @@ jobs:
         if: always()
         run: |
           cd tests/functional
-          docker-compose -f docker/docker-compose.${{ matrix.storage_mode }}.yml down -v || true
+          docker compose -f docker/docker-compose.${{ matrix.storage_mode }}.yml down -v || true
   
   test-summary:
     name: Test Summary

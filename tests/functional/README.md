@@ -36,8 +36,8 @@ This test suite runs end-to-end functional tests in an isolated Docker environme
 ```
 tests/functional/
 ├── docker/
-│   ├── docker-compose.local.yml      # SQLite mode (fast)
-│   ├── docker-compose.postgres.yml   # PostgreSQL mode (production-like)
+│   ├── docker compose.local.yml      # SQLite mode (fast)
+│   ├── docker compose.postgres.yml   # PostgreSQL mode (production-like)
 │   ├── Dockerfile.test-runner        # Test execution container
 │   ├── agentfield-test.yaml          # Control plane configuration
 │   └── wait-for-services.sh          # Health check script
@@ -101,10 +101,10 @@ tests/functional/
    make test-functional-postgres   # PostgreSQL mode
    make test-functional            # Both modes
    
-   # Or directly with docker-compose
+   # Or directly with docker compose
    cd tests/functional
    export OPENROUTER_API_KEY=your_key
-   docker-compose -f docker/docker-compose.local.yml up --build
+   docker compose -f docker/docker compose.local.yml up --build
    ```
 
 ## 📖 Usage Guide
@@ -326,13 +326,13 @@ Reports include:
 ```bash
 # Control plane logs
 cd tests/functional
-docker-compose -f docker/docker-compose.local.yml logs control-plane
+docker compose -f docker/docker compose.local.yml logs control-plane
 
 # Test runner logs
-docker-compose -f docker/docker-compose.local.yml logs test-runner
+docker compose -f docker/docker compose.local.yml logs test-runner
 
 # All logs
-docker-compose -f docker/docker-compose.local.yml logs
+docker compose -f docker/docker compose.local.yml logs
 ```
 
 ### Interactive Debugging
@@ -343,10 +343,10 @@ Start services without running tests:
 cd tests/functional
 
 # Start just the control plane
-docker-compose -f docker/docker-compose.local.yml up control-plane
+docker compose -f docker/docker compose.local.yml up control-plane
 
 # In another terminal, run tests with debugging
-docker-compose -f docker/docker-compose.local.yml run test-runner bash
+docker compose -f docker/docker compose.local.yml run test-runner bash
 # Inside container:
 pytest -vv --pdb
 ```
@@ -462,7 +462,7 @@ Make sure you've either:
 
 Check logs:
 ```bash
-docker-compose -f docker/docker-compose.local.yml logs control-plane
+docker compose -f docker/docker compose.local.yml logs control-plane
 ```
 
 Common issues:
