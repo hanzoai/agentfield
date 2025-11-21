@@ -1,197 +1,111 @@
-"""Simple, flat schemas for multi-agent simulation system.
+"""Pydantic schemas for the simulation engine."""
 
-All schemas follow the constraint: maximum 3-4 fields, no nesting, simple types only.
-"""
-
-from __future__ import annotations
-
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
 
-# ========================= Input Schemas =========================
-
-
-class SimulationRequest(BaseModel):
-    """Main input schema for simulation requests."""
-
-    scenario_description: str = Field(
-        description="Natural language description of the scenario"
-    )
-    scenario_context: str = Field(
-        default="{}", description="JSON string with flexible structured data"
-    )
-    output_requirements: str = Field(
-        default="{}", description="JSON string specifying desired outputs"
-    )
-    max_concurrent: int = Field(
-        default=200, description="Maximum number of concurrent reasoner calls"
-    )
-
-
-# ========================= Scenario Analysis Schemas =========================
-
-
-class EntityExtraction(BaseModel):
-    """Simple schema for entity extraction - max 3 fields."""
+class ScenarioAnalysis(BaseModel):
+    """Simple schema for scenario decomposition"""
 
     entity_type: str = Field(
-        description="Type of entity (e.g., 'actor', 'region', 'organization')"
+        description="Type of entity being simulated (e.g., 'customer', 'voter', 'employee')"
     )
-    entity_name: str = Field(description="Name or identifier of the entity")
-    description: str = Field(description="Brief description of the entity")
-
-
-class ActionExtraction(BaseModel):
-    """Simple schema for action extraction - max 2 fields."""
-
-    action_name: str = Field(description="Name of the action or decision")
-    action_description: str = Field(
-        description="Description of what this action entails"
+    decision_type: str = Field(
+        description="Type of decision (e.g., 'binary_choice', 'multi_option', 'continuous_value')"
     )
-
-
-class OutputExtraction(BaseModel):
-    """Simple schema for output requirement extraction - max 2 fields."""
-
-    output_name: str = Field(description="Name of the desired output metric or insight")
-    output_description: str = Field(
-        description="Description of what this output should contain"
+    decision_options: List[str] = Field(
+        description="List of possible decisions/outcomes"
+    )
+    analysis: str = Field(
+        description="Detailed analysis of the scenario including key factors, causal relationships, and what matters"
+    )
+    key_attributes: List[str] = Field(
+        default=[],
+        description="Top 5-7 attributes that matter most for this decision (identified from analysis)",
     )
 
 
-# ========================= List Wrapper Schemas (for .ai() calls) =========================
+class FactorGraph(BaseModel):
+    """Schema for the causal attribute graph"""
 
-
-class EntityExtractionList(BaseModel):
-    """Wrapper for list of entities - required for Pydantic schema in .ai() calls."""
-
-    entities: list[EntityExtraction] = Field(description="List of extracted entities")
-
-
-class ActionExtractionList(BaseModel):
-    """Wrapper for list of actions - required for Pydantic schema in .ai() calls."""
-
-    actions: list[ActionExtraction] = Field(description="List of extracted actions")
-
-
-class OutputExtractionList(BaseModel):
-    """Wrapper for list of outputs - required for Pydantic schema in .ai() calls."""
-
-    outputs: list[OutputExtraction] = Field(description="List of extracted outputs")
-
-
-# ========================= Actor Generation Schemas =========================
-
-
-class ActorTrait(BaseModel):
-    """Simple schema for actor trait - max 2 fields."""
-
-    trait_name: str = Field(
-        description="Name of the trait (e.g., 'age', 'region', 'preference')"
+    attributes: Dict[str, str] = Field(
+        description="Dictionary of attribute_name: description. Each attribute that matters for this entity."
     )
-    trait_value: str = Field(description="Value of the trait")
-
-
-class ActorAssignment(BaseModel):
-    """Simple schema for actor assignment to hierarchy level - max 2 fields."""
-
-    actor_id: str = Field(description="Unique identifier for the actor")
-    hierarchy_level: str = Field(
-        description="Hierarchy level name (e.g., 'region', 'group')"
+    attribute_graph: str = Field(
+        description="Detailed description of how attributes relate to each other and to the decision, including correlations, dependencies, and causal chains"
+    )
+    sampling_strategy: str = Field(
+        description="Description of how to sample these attributes to get realistic, diverse entities"
     )
 
 
-# ========================= Behavior Simulation Schemas =========================
+class EntityProfile(BaseModel):
+    """Schema for a single entity's attributes"""
 
-
-class ActionEvaluation(BaseModel):
-    """Simple schema for action evaluation - max 2 fields."""
-
-    decision: str = Field(description="The decision or choice made")
-    confidence: float = Field(
-        description="Confidence score between 0.0 and 1.0", ge=0.0, le=1.0
+    entity_id: str
+    attributes: Dict[str, Any] = Field(
+        description="Dictionary of attribute_name: value for this entity"
+    )
+    profile_summary: str = Field(
+        description="2-3 sentence human-readable summary of who this entity is"
     )
 
 
-class Reasoning(BaseModel):
-    """Simple schema for reasoning text - max 1 field."""
+class EntityBatch(BaseModel):
+    """Schema for generating multiple entities at once"""
 
-    reasoning_text: str = Field(
-        description="The reasoning or explanation for a decision"
+    entities: List[Dict[str, Any]] = Field(
+        description="List of entity attribute dictionaries"
     )
 
 
-class SentimentScore(BaseModel):
-    """Simple schema for sentiment calculation - max 1 field."""
+class EntityDecision(BaseModel):
+    """Schema for entity's decision - simplified to avoid JSON parsing issues"""
 
-    sentiment_score: float = Field(
-        description="Sentiment score between -1.0 and 1.0", ge=-1.0, le=1.0
+    entity_id: str
+    decision: str = Field(
+        description="The chosen decision/action from the available options"
+    )
+    confidence: float = Field(description="Confidence in this decision, 0.0 to 1.0")
+    key_factor: str = Field(
+        description="Single most important attribute that influenced this decision (max 50 words)"
+    )
+    trade_off: str = Field(description="Main trade-off considered (max 50 words)")
+    reasoning: Optional[str] = Field(
+        default="",
+        description="Brief explanation (1-2 sentences, max 100 words) - optional",
     )
 
 
-# ========================= Interaction Schemas =========================
+class SimulationInsights(BaseModel):
+    """Schema for final simulation results"""
 
-
-class InfluenceScore(BaseModel):
-    """Simple schema for influence modeling - max 2 fields."""
-
-    influence_score: float = Field(
-        description="Influence strength between 0.0 and 1.0", ge=0.0, le=1.0
+    outcome_distribution: Dict[str, float] = Field(
+        description="Percentage for each decision option"
     )
-    influence_direction: str = Field(
-        description="Direction: 'positive', 'negative', or 'neutral'"
+    key_insight: str = Field(
+        description="One sentence summary of the most important finding"
     )
-
-
-class OpinionUpdate(BaseModel):
-    """Simple schema for opinion propagation - max 2 fields."""
-
-    updated_opinion: str = Field(description="The updated opinion after influence")
-    change_magnitude: float = Field(
-        description="Magnitude of change between 0.0 and 1.0", ge=0.0, le=1.0
+    detailed_analysis: str = Field(
+        description="Comprehensive analysis (4-5 paragraphs) covering: overall patterns, segment differences, causal drivers, surprising findings, and implications"
     )
-
-
-# ========================= Aggregation Schemas =========================
-
-
-class Metric(BaseModel):
-    """Simple schema for metric calculation - max 2 fields."""
-
-    metric_name: str = Field(description="Name of the metric")
-    metric_value: float = Field(description="Calculated value of the metric")
-
-
-class LevelAggregation(BaseModel):
-    """Simple schema for hierarchy level aggregation - max 2 fields."""
-
-    level_name: str = Field(description="Name of the hierarchy level")
-    aggregated_data: str = Field(
-        description="JSON string with aggregated data for this level"
+    segment_patterns: str = Field(
+        description="Description of how different types of entities decided differently, organized by meaningful segments"
     )
-
-
-class Insight(BaseModel):
-    """Simple schema for insight generation - max 1 field."""
-
-    insight_text: str = Field(description="Generated insight or observation")
-
-
-# ========================= Output Schema =========================
+    causal_drivers: str = Field(
+        description="Analysis of which attributes most strongly predicted decisions, with specific examples and correlations"
+    )
 
 
 class SimulationResult(BaseModel):
-    """Final output schema - uses Dict for flexibility but keeps structure simple."""
+    """Complete simulation result"""
 
-    summary: str = Field(description="High-level summary as JSON string")
-    statistics: str = Field(description="Statistics as JSON string")
-    actor_responses: str = Field(description="Actor responses as JSON string")
-    hierarchical_breakdown: str = Field(
-        description="Hierarchical breakdown as JSON string"
-    )
-    reasoning_traces: str = Field(description="Reasoning traces as JSON string")
-    recommendations: Optional[str] = Field(
-        default=None, description="Recommendations as JSON string if applicable"
-    )
+    scenario: str
+    context: List[str]
+    population_size: int
+    scenario_analysis: ScenarioAnalysis
+    factor_graph: FactorGraph
+    entities: List[EntityProfile]
+    decisions: List[EntityDecision]
+    insights: SimulationInsights

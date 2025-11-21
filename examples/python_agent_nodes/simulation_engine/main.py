@@ -19,9 +19,8 @@ if __package__ in (None, ""):
 
 from routers import (
     aggregation_router,
-    actor_router,
-    behavior_router,
-    interaction_router,
+    decision_router,
+    entity_router,
     scenario_router,
     simulation_router,
 )
@@ -37,9 +36,8 @@ app = Agent(
 # Register all routers
 for router in (
     scenario_router,
-    actor_router,
-    behavior_router,
-    interaction_router,
+    entity_router,
+    decision_router,
     aggregation_router,
     simulation_router,
 ):
@@ -51,19 +49,20 @@ if __name__ == "__main__":
     print("🧠 Node ID: simulation-engine")
     print(f"🌐 Control Plane: {app.agentfield_server}")
     print("\n📊 Architecture: Multi-Reasoner Parallel System")
-    print("  1. Scenario Analysis → Extract entities, actions, outputs (parallel)")
-    print("  2. Actor Generation → Create diverse actor population (parallel)")
+    print("  1. Scenario Analysis → Decompose scenario and build factor graph")
     print(
-        "  3. Behavior Simulation → Evaluate actions for all actors (massive parallelism)"
+        "  2. Entity Generation → Create diverse entity population (batched parallel)"
     )
-    print("  4. Interaction Modeling → Model influence and propagation (parallel)")
-    print("  5. Aggregation → Calculate metrics, insights (parallel)")
+    print(
+        "  3. Decision Simulation → Simulate decisions for all entities (parallel batches)"
+    )
+    print("  4. Aggregation → Analyze results and generate insights")
     print("\n✨ Key Features:")
-    print("  - Simple, flat schemas (max 3-4 fields) for all reasoners")
-    print("  - Maximum parallelism (100+ concurrent reasoner calls)")
-    print("  - Right context to right AI (minimal, focused prompts)")
+    print("  - Scalable to large populations (1000+ entities)")
+    print("  - Optimized batching (5 entities per AI call)")
+    print("  - Parallel decision simulation (20 concurrent)")
+    print("  - Intelligent data sampling for analysis")
     print("  - Domain-agnostic (works for any enterprise scenario)")
-    print("  - Full observability (reasoning traces for all decisions)")
 
     port_env = os.getenv("PORT")
     if port_env is None:

@@ -1,17 +1,15 @@
-"""Routers for simulation engine."""
+"""Router modules for simulation engine."""
 
-from routers.aggregation_router import aggregation_router
-from routers.actor_router import actor_router
-from routers.behavior_router import behavior_router
-from routers.interaction_router import interaction_router
-from routers.scenario_router import scenario_router
-from routers.simulation_router import simulation_router
+from .aggregation import aggregation_router
+from .decision import decision_router
+from .entity import entity_router
+from .scenario import scenario_router
+from .simulation import simulation_router
 
 __all__ = [
     "scenario_router",
-    "actor_router",
-    "behavior_router",
-    "interaction_router",
+    "entity_router",
+    "decision_router",
     "aggregation_router",
     "simulation_router",
 ]
