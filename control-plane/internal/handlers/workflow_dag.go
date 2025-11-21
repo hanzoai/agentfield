@@ -398,6 +398,7 @@ func buildLightweightExecutionDAG(executions []*types.Execution) ([]WorkflowDAGL
 	}
 
 	depthCache := make(map[string]int, len(executions))
+	computing := make(map[string]bool) // Track executions currently being computed to detect cycles
 	var maxDepth int
 
 	var computeDepth func(exec *types.Execution) int
@@ -409,6 +410,13 @@ func buildLightweightExecutionDAG(executions []*types.Execution) ([]WorkflowDAGL
 		if depth, ok := depthCache[exec.ExecutionID]; ok {
 			return depth
 		}
+
+		// Cycle detection: if we're already computing this execution, return 0 to break the cycle
+		if computing[exec.ExecutionID] {
+			return 0
+		}
+		computing[exec.ExecutionID] = true
+		defer delete(computing, exec.ExecutionID)
 
 		depth := 0
 		if exec.ParentExecutionID != nil && *exec.ParentExecutionID != "" {
