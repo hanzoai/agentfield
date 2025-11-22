@@ -1322,10 +1322,13 @@ class Agent(FastAPI):
 
         did_execution_context = None
         if self.did_enabled and self.did_manager:
+            session_identifier = (
+                execution_context.session_id or execution_context.workflow_id
+            )
             did_execution_context = self.did_manager.create_execution_context(
                 execution_context.execution_id,
                 execution_context.workflow_id,
-                execution_context.workflow_id,
+                session_identifier,
                 "agent",
                 reasoner_id,
             )
@@ -1751,10 +1754,13 @@ class Agent(FastAPI):
                 # Create DID execution context if DID system is enabled
                 did_execution_context = None
                 if self.did_enabled and self.did_manager:
+                    session_identifier = (
+                        execution_context.session_id or execution_context.workflow_id
+                    )
                     did_execution_context = self.did_manager.create_execution_context(
                         execution_context.execution_id,
                         execution_context.workflow_id,
-                        execution_context.workflow_id,  # Use workflow_id as session_id for now
+                        session_identifier,
                         "agent",  # caller function
                         skill_id,  # target function
                     )
