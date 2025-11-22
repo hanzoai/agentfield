@@ -8,17 +8,53 @@ allowing tests to interact with the control plane and create test agents.
 import asyncio
 import os
 import time
-from typing import AsyncGenerator, Callable, Dict, Generator, Optional
 import uuid
+from pathlib import Path
+from typing import AsyncGenerator, Callable, Dict, Generator, Optional
 
 import httpx
 import pytest
 from agentfield import Agent, AIConfig
 
+from utils import FunctionalTestLogger, InstrumentedAsyncClient
+
 pytest_plugins = ("pytest_asyncio",)
 
 AGENT_BIND_HOST = os.environ.get("TEST_AGENT_BIND_HOST", "127.0.0.1")
 AGENT_CALLBACK_HOST = os.environ.get("TEST_AGENT_CALLBACK_HOST", "127.0.0.1")
+HTTP_LOGGING_ENABLED = os.environ.get("FUNCTIONAL_HTTP_LOGGING", "1") != "0"
+
+CONFTEST_DIR = Path(__file__).resolve().parent
+_SESSION_LOGGER: Optional[FunctionalTestLogger] = None
+
+
+def _init_session_logger() -> FunctionalTestLogger:
+    """Create (or reuse) the global FunctionalTestLogger instance."""
+    log_candidates = []
+    preferred = os.environ.get("FUNCTIONAL_LOG_FILE")
+    if preferred:
+        log_candidates.append(Path(preferred).expanduser())
+    log_candidates.append(CONFTEST_DIR / "logs" / "functional-tests.log")
+    log_candidates.append(Path("/reports/functional-tests.log"))
+
+    log_path: Optional[Path] = None
+    for candidate in log_candidates:
+        try:
+            candidate.parent.mkdir(parents=True, exist_ok=True)
+            log_path = candidate
+            break
+        except OSError:
+            continue
+
+    max_chars = int(os.environ.get("FUNCTIONAL_LOG_MAX_BODY", "600"))
+    return FunctionalTestLogger(log_file=log_path, max_body_chars=max_chars)
+
+
+def _get_session_logger() -> FunctionalTestLogger:
+    global _SESSION_LOGGER
+    if _SESSION_LOGGER is None:
+        _SESSION_LOGGER = _init_session_logger()
+    return _SESSION_LOGGER
 
 
 # ============================================================================
@@ -69,26 +105,33 @@ def test_timeout() -> int:
 # Control Plane Health Check
 # ============================================================================
 
+@pytest.fixture(scope="session")
+def functional_logger() -> FunctionalTestLogger:
+    """Shared structured logger for the entire functional suite."""
+    return _get_session_logger()
+
+
 @pytest.fixture(scope="session", autouse=True)
-def verify_control_plane(control_plane_url: str):
+def verify_control_plane(control_plane_url: str, functional_logger: FunctionalTestLogger):
     """Verify that the control plane is accessible before running tests."""
     health_url = f"{control_plane_url}/api/v1/health"
     max_attempts = 30
-    
-    print(f"\nVerifying control plane at {control_plane_url}...")
-    
+
+    functional_logger.section(f"Verifying control plane at {control_plane_url}")
+
     for attempt in range(max_attempts):
         try:
             response = httpx.get(health_url, timeout=2.0)
             if response.status_code == 200:
-                print(f"✓ Control plane is healthy (attempt {attempt + 1})")
+                functional_logger.log(f"✓ Control plane is healthy (attempt {attempt + 1})")
                 return
         except (httpx.RequestError, httpx.TimeoutException):
             pass
-        
+
         if attempt < max_attempts - 1:
             time.sleep(1)
-    
+
+    functional_logger.log("Control plane did not respond to health checks in time")
     pytest.fail(f"Control plane at {control_plane_url} is not responding to health checks")
 
 
@@ -97,14 +140,26 @@ def verify_control_plane(control_plane_url: str):
 # ============================================================================
 
 @pytest.fixture
-async def async_http_client(control_plane_url: str) -> AsyncGenerator[httpx.AsyncClient, None]:
+async def async_http_client(
+    control_plane_url: str,
+    functional_logger: FunctionalTestLogger,
+) -> AsyncGenerator[httpx.AsyncClient, None]:
     """Provide an async HTTP client configured for the control plane."""
-    async with httpx.AsyncClient(
-        base_url=control_plane_url,
-        timeout=30.0,
-        follow_redirects=True
-    ) as client:
-        yield client
+    if HTTP_LOGGING_ENABLED:
+        async with InstrumentedAsyncClient(
+            logger=functional_logger,
+            base_url=control_plane_url,
+            timeout=30.0,
+            follow_redirects=True,
+        ) as client:
+            yield client
+    else:  # pragma: no cover - fallback path for disabling verbose logging
+        async with httpx.AsyncClient(
+            base_url=control_plane_url,
+            timeout=30.0,
+            follow_redirects=True,
+        ) as client:
+            yield client
 
 
 # ============================================================================
@@ -278,3 +333,35 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "openrouter: Tests that require OpenRouter API access"
     )
+    # Ensure the session logger is ready before tests begin so early logs aren't lost.
+    _get_session_logger()
+
+
+def pytest_runtest_setup(item):
+    if _SESSION_LOGGER:
+        _SESSION_LOGGER.start_test(item.nodeid)
+
+
+def pytest_runtest_logreport(report):
+    if not _SESSION_LOGGER:
+        return
+
+    if report.when == "setup" and report.skipped:
+        _SESSION_LOGGER.finish_test(report.nodeid, "SKIPPED")
+    elif report.when == "setup" and report.failed:
+        _SESSION_LOGGER.finish_test(report.nodeid, "FAILED (setup)")
+    elif report.when == "call":
+        if report.failed:
+            outcome = "FAILED"
+        elif report.skipped:
+            outcome = "SKIPPED"
+        else:
+            outcome = "PASSED"
+        _SESSION_LOGGER.finish_test(report.nodeid, outcome)
+    elif report.when == "teardown" and report.failed:
+        _SESSION_LOGGER.finish_test(report.nodeid, "FAILED (teardown)")
+
+
+def pytest_sessionfinish(session, exitstatus):
+    if _SESSION_LOGGER:
+        _SESSION_LOGGER.summarize()
