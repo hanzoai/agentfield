@@ -43,7 +43,7 @@ services:
       sh -c "
       echo 'Waiting for control plane to be fully ready...' &&
       wait-for-services.sh &&
-      pytest $$PYTEST_ARGS --junit-xml=/tests/junit-local.xml --tb=short
+      pytest $$PYTEST_ARGS --junit-xml=/reports/junit-local.xml --tb=short
       "
 
 networks:

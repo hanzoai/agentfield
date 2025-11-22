@@ -62,9 +62,7 @@ test-functional-local:
 	@if [ -f tests/functional/logs/functional-tests.log ]; then \
 		cp tests/functional/logs/functional-tests.log test-reports/functional-tests-local.log; \
 	fi
-	@if [ -f tests/functional/junit-local.xml ]; then \
-		cp tests/functional/junit-local.xml test-reports/; \
-	fi
+	@docker cp agentfield-test-runner-local:/reports/junit-local.xml test-reports/ 2>/dev/null || echo "⚠️  No JUnit report found in container"
 	$(MAKE) test-functional-cleanup-local
 
 test-functional-postgres:
@@ -82,9 +80,7 @@ test-functional-postgres:
 	@if [ -f tests/functional/logs/functional-tests.log ]; then \
 		cp tests/functional/logs/functional-tests.log test-reports/functional-tests-postgres.log; \
 	fi
-	@if [ -f tests/functional/junit-postgres.xml ]; then \
-		cp tests/functional/junit-postgres.xml test-reports/; \
-	fi
+	@docker cp agentfield-test-runner-postgres:/reports/junit-postgres.xml test-reports/ 2>/dev/null || echo "⚠️  No JUnit report found in container"
 	$(MAKE) test-functional-cleanup-postgres
 
 test-functional-cleanup: test-functional-cleanup-local test-functional-cleanup-postgres

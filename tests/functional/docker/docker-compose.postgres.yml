@@ -68,7 +68,7 @@ services:
       sh -c "
       echo 'Waiting for control plane to be fully ready...' &&
       wait-for-services.sh &&
-      pytest $$PYTEST_ARGS --junit-xml=/tests/junit-postgres.xml --tb=short
+      pytest $$PYTEST_ARGS --junit-xml=/reports/junit-postgres.xml --tb=short
       "
 
 networks:
