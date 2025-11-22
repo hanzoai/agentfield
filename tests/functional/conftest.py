@@ -36,21 +36,38 @@ def _init_session_logger() -> FunctionalTestLogger:
         log_candidates.append(Path(preferred).expanduser())
     log_candidates.append(CONFTEST_DIR / "logs" / "functional-tests.log")
     log_candidates.append(Path("/reports/functional-tests.log"))
+    log_candidates.append(Path("/tmp/functional-tests.log"))
 
-    log_path: Optional[Path] = None
+    max_chars = int(os.environ.get("FUNCTIONAL_LOG_MAX_BODY", "600"))
+    retention_seconds = int(os.environ.get("FUNCTIONAL_LOG_RETENTION_SECONDS", "86400"))
+
+    last_error: Optional[OSError] = None
     for candidate in log_candidates:
         try:
             candidate.parent.mkdir(parents=True, exist_ok=True)
-            log_path = candidate
-            break
-        except OSError:
+        except OSError as exc:
+            last_error = exc
             continue
 
-    retention_seconds = int(os.environ.get("FUNCTIONAL_LOG_RETENTION_SECONDS", "172800"))
-    _prune_old_logs(log_path.parent, retention_seconds)
+        try:
+            _prune_old_logs(candidate.parent, retention_seconds)
+        except OSError:
+            # Best-effort cleanup; don't block logger creation if pruning fails
+            pass
 
-    max_chars = int(os.environ.get("FUNCTIONAL_LOG_MAX_BODY", "600"))
-    return FunctionalTestLogger(log_file=log_path, max_body_chars=max_chars)
+        try:
+            return FunctionalTestLogger(log_file=candidate, max_body_chars=max_chars)
+        except OSError as exc:
+            last_error = exc
+            continue
+
+    logger = FunctionalTestLogger(log_file=None, max_body_chars=max_chars)
+    if last_error:
+        logger.log(
+            "⚠️ Functional logs will only stream to stdout; "
+            f"unable to persist log file ({last_error})."
+        )
+    return logger
 
 
 def _get_session_logger() -> FunctionalTestLogger:

@@ -55,7 +55,8 @@ test-functional-local:
 		echo "   Or use: make test-functional-local OPENROUTER_API_KEY=your-key"; \
 		exit 1; \
 	fi
-	mkdir -p test-reports
+	mkdir -p test-reports tests/functional/logs
+	chmod -R 777 test-reports tests/functional/logs || true
 	cd tests/functional && \
 		docker compose -f docker/docker-compose.local.yml up --build --abort-on-container-exit --exit-code-from test-runner
 	@if [ -f tests/functional/logs/functional-tests.log ]; then \
@@ -71,7 +72,8 @@ test-functional-postgres:
 		echo "   Or use: make test-functional-postgres OPENROUTER_API_KEY=your-key"; \
 		exit 1; \
 	fi
-	mkdir -p test-reports
+	mkdir -p test-reports tests/functional/logs
+	chmod -R 777 test-reports tests/functional/logs || true
 	cd tests/functional && \
 		docker compose -f docker/docker-compose.postgres.yml up --build --abort-on-container-exit --exit-code-from test-runner
 	@if [ -f tests/functional/logs/functional-tests.log ]; then \

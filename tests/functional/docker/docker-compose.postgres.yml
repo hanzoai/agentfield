@@ -56,10 +56,10 @@ services:
       TEST_TIMEOUT: ${TEST_TIMEOUT:-300}
       TEST_AGENT_BIND_HOST: ${TEST_AGENT_BIND_HOST:-0.0.0.0}
       TEST_AGENT_CALLBACK_HOST: ${TEST_AGENT_CALLBACK_HOST:-test-runner}
-      FUNCTIONAL_LOG_FILE: /tests/logs/functional-tests.log
+      FUNCTIONAL_LOG_FILE: /tests/functional/logs/functional-tests.log
     volumes:
       - ../:/tests
-      - ../../../test-reports:/reports
+      - ../../test-reports:/reports
     depends_on:
       - control-plane
     networks:

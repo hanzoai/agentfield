@@ -48,6 +48,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       
+      - name: Prepare artifact directories
+        run: |
+          mkdir -p test-reports tests/functional/logs
+          chmod -R 777 test-reports tests/functional/logs
+      
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       
@@ -84,19 +89,12 @@ jobs:
               --exit-code-from test-runner
           fi
       
-      - name: Extract test reports
+      - name: Collect functional logs
         if: always()
         run: |
-          # Create reports directory
           mkdir -p test-reports
-          
-          # Try to copy reports from Docker volume
-          VOLUME_NAME="functional_test-reports"
-          if docker volume inspect $VOLUME_NAME >/dev/null 2>&1; then
-            docker run --rm \
-              -v $VOLUME_NAME:/reports \
-              -v $(pwd)/test-reports:/output \
-              busybox cp -r /reports/. /output/ 2>/dev/null || true
+          if [ -f tests/functional/logs/functional-tests.log ]; then
+            cp tests/functional/logs/functional-tests.log test-reports/functional-tests-${{ matrix.storage_mode }}.log
           fi
       
       - name: Upload test reports
@@ -105,7 +103,7 @@ jobs:
         with:
           name: test-reports-${{ matrix.storage_mode }}
           path: test-reports/
-          retention-days: 7
+          retention-days: 1
       
       - name: Upload logs
         if: failure()
@@ -120,7 +118,7 @@ jobs:
         with:
           name: logs-${{ matrix.storage_mode }}
           path: logs/
-          retention-days: 7
+          retention-days: 1
       
       - name: Cleanup
         if: always()
