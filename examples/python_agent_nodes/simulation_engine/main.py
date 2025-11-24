@@ -29,7 +29,8 @@ app = Agent(
     node_id="simulation-engine",
     agentfield_server=f"{os.getenv('AGENTFIELD_SERVER', 'http://localhost:8080')}",
     ai_config=AIConfig(
-        model=os.getenv("AI_MODEL", "openrouter/deepseek/deepseek-v3.1-terminus"),
+        model=os.getenv("AI_MODEL", "ollama/llama3.2"),  # Free local model via Ollama
+        api_base=os.getenv("OLLAMA_API_BASE", "http://localhost:11434"),  # Ollama default port
     ),
 )
 
