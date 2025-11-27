@@ -1,4 +1,5 @@
 import type { SkillContext } from '../context/SkillContext.js';
+import type { Awaitable } from './agent.js';
 
 export interface SkillDefinition<TInput = any, TOutput = any> {
   name: string;
@@ -8,7 +9,7 @@ export interface SkillDefinition<TInput = any, TOutput = any> {
 
 export type SkillHandler<TInput = any, TOutput = any> = (
   ctx: SkillContext<TInput>
-) => TOutput;
+) => Awaitable<TOutput>;
 
 export interface SkillOptions {
   tags?: string[];

@@ -24,6 +24,9 @@ import { DidInterface } from '../did/DidInterface.js';
 import { matchesPattern } from '../utils/pattern.js';
 import { WorkflowReporter } from '../workflow/WorkflowReporter.js';
 import type { DiscoveryOptions } from '../types/agent.js';
+import type { MCPToolRegistration } from '../types/mcp.js';
+import { MCPClientRegistry } from '../mcp/MCPClientRegistry.js';
+import { MCPToolRegistrar } from '../mcp/MCPToolRegistrar.js';
 
 export class Agent {
   readonly config: AgentConfig;
@@ -38,14 +41,24 @@ export class Agent {
   private readonly memoryEventClient: MemoryEventClient;
   private readonly didClient: DidClient;
   private readonly memoryWatchers: Array<{ pattern: string; handler: MemoryWatchHandler; scope?: string; scopeId?: string }> = [];
+  private readonly mcpClientRegistry?: MCPClientRegistry;
+  private readonly mcpToolRegistrar?: MCPToolRegistrar;
 
   constructor(config: AgentConfig) {
+    const mcp = config.mcp
+      ? {
+          autoRegisterTools: config.mcp.autoRegisterTools ?? true,
+          ...config.mcp
+        }
+      : undefined;
+
     this.config = {
       port: 8001,
       agentFieldUrl: 'http://localhost:8080',
       host: '0.0.0.0',
       didEnabled: config.didEnabled ?? true,
-      ...config
+      ...config,
+      mcp
     };
 
     this.app = express();
@@ -57,6 +70,16 @@ export class Agent {
     this.memoryEventClient = new MemoryEventClient(this.config.agentFieldUrl!, this.config.defaultHeaders);
     this.didClient = new DidClient(this.config.agentFieldUrl!, this.config.defaultHeaders);
     this.memoryEventClient.onEvent((event) => this.dispatchMemoryEvent(event));
+
+    if (this.config.mcp?.servers?.length) {
+      this.mcpClientRegistry = new MCPClientRegistry(this.config.devMode);
+      this.mcpToolRegistrar = new MCPToolRegistrar(this, this.mcpClientRegistry, {
+        namespace: this.config.mcp.namespace,
+        tags: this.config.mcp.tags,
+        devMode: this.config.devMode
+      });
+      this.mcpToolRegistrar.registerServers(this.config.mcp.servers);
+    }
 
     this.registerDefaultRoutes();
   }
@@ -94,6 +117,11 @@ export class Agent {
 
   discover(options?: DiscoveryOptions) {
     return this.agentFieldClient.discoverCapabilities(options);
+  }
+
+  async registerMcpTools(): Promise<{ registered: MCPToolRegistration[] }> {
+    if (!this.mcpToolRegistrar) return { registered: [] };
+    return this.mcpToolRegistrar.registerAll();
   }
 
   getAIClient() {
@@ -151,6 +179,16 @@ export class Agent {
   }
 
   async serve(): Promise<void> {
+    if (this.config.mcp?.autoRegisterTools !== false) {
+      try {
+        await this.registerMcpTools();
+      } catch (err) {
+        if (this.config.devMode) {
+          console.warn('MCP tool registration failed', err);
+        }
+      }
+    }
+
     await this.registerWithControlPlane();
     const port = this.config.port ?? 8001;
     const host = this.config.host ?? '0.0.0.0';
@@ -277,8 +315,22 @@ export class Agent {
     });
 
     // MCP health probe expected by control-plane UI
-    this.app.get('/health/mcp', (_req, res) => {
-      res.json({ status: 'ok' });
+    this.app.get('/health/mcp', async (_req, res) => {
+      if (!this.mcpClientRegistry) {
+        res.json({ status: 'disabled', totalServers: 0, healthyServers: 0, servers: [] });
+        return;
+      }
+
+      try {
+        const summary = await this.mcpClientRegistry.healthSummary();
+        res.json(summary);
+      } catch (err: any) {
+        res.status(500).json({ status: 'error', error: err?.message ?? 'MCP health check failed' });
+      }
+    });
+
+    this.app.get('/mcp/status', (_req, res) => {
+      res.json(this.mcpStatus());
     });
 
     this.app.get('/status', (_req, res) => {
@@ -354,7 +406,7 @@ export class Agent {
     const metadata = this.buildMetadata(req);
     const execCtx = new ExecutionContext({ input: req.body, metadata, req, res, agent: this });
 
-    return ExecutionContext.run(execCtx, () => {
+    return ExecutionContext.run(execCtx, async () => {
       try {
         const ctx = new SkillContext({
           input: req.body,
@@ -369,7 +421,7 @@ export class Agent {
           did: this.getDidInterface(metadata, req.body)
         });
 
-        const result = skill.handler(ctx);
+        const result = await skill.handler(ctx);
         res.json(result);
       } catch (err: any) {
         res.status(500).json({ error: err?.message ?? 'Execution failed' });
@@ -465,6 +517,27 @@ export class Agent {
       status: 'running',
       nodeId: this.config.nodeId,
       version: this.config.version
+    };
+  }
+
+  private mcpStatus() {
+    const servers = this.mcpClientRegistry
+      ? this.mcpClientRegistry.list().map((client) => ({
+          alias: client.alias,
+          baseUrl: client.baseUrl,
+          transport: client.transport
+        }))
+      : [];
+
+    const skills = this.skills
+      .all()
+      .filter((skill) => skill.options?.tags?.includes('mcp'))
+      .map((skill) => skill.name);
+
+    return {
+      status: servers.length ? 'configured' : 'disabled',
+      servers,
+      skills
     };
   }
 
