@@ -105,7 +105,22 @@ async def test_typescript_agent_registers_and_executes(async_http_client):
 
         # Collect logs if execution fails for easier debugging
         if resp.status_code != 200:
-            stdout, stderr = await process.communicate()
+            async def _drain_process(proc: asyncio.subprocess.Process, timeout: float = 5.0):
+                """
+                Capture stdout/stderr without hanging the test if the agent stays alive.
+                We explicitly terminate on timeout so we don't block on a long-lived heartbeat loop.
+                """
+                try:
+                    return await asyncio.wait_for(proc.communicate(), timeout=timeout)
+                except asyncio.TimeoutError:
+                    proc.terminate()
+                    try:
+                        return await asyncio.wait_for(proc.communicate(), timeout=timeout)
+                    except asyncio.TimeoutError:
+                        proc.kill()
+                        return await asyncio.wait_for(proc.communicate(), timeout=timeout)
+
+            stdout, stderr = await _drain_process(process)
             print("TS agent stdout:", stdout.decode("utf-8"), file=sys.stderr)
             print("TS agent stderr:", stderr.decode("utf-8"), file=sys.stderr)
 
