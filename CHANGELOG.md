@@ -6,6 +6,94 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.12] - 2025-12-02
+
+
+### Chores
+
+- Chore: trigger Railway deployment for PR #39 fix (b4095d2)
+
+
+
+### Documentation
+
+- Docs(chatbot): add SDK search term relationship
+
+Add search term mapping for SDK/language queries to improve RAG
+retrieval when users ask about supported languages or SDKs.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com> (87a4d90)
+
+- Docs(chatbot): add TypeScript SDK to supported languages
+
+Update product context to include TypeScript alongside Python and Go:
+- CLI commands now mention all three language options
+- Getting started section references TypeScript
+- API Reference includes TypeScript SDK
+
+This fixes the RAG chatbot returning only Python/Go when asked about
+supported languages.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com> (9510d74)
+
+
+
+### Fixed
+
+- Fix(vector-store): fix PostgreSQL DeleteByPrefix and update namespace defaults
+
+- Fix DeleteByPrefix to use PostgreSQL || operator for LIKE pattern
+  (the previous approach with prefix+"%" in Go wasn't working correctly
+  with parameter binding)
+- Change default namespace from "documentation" to "website-docs" to
+  match the frontend chat API expectations
+- Add scope: "global" to clear_namespace API call to ensure proper
+  scope matching
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com> (cbfdf7b)
+
+- Fix(docs-chatbot): use correct start command
+
+Change start command from `python -m agentfield.run` (doesn't exist)
+to `python main.py` (the actual entry point).
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com> (b71507c)
+
+- Fix(docs-chatbot): override install phase for PyPI wait
+
+The previous fix used buildCommand which runs AFTER pip install.
+This fix overrides the install phase itself:
+
+- Add nixpacks.toml with [phases.install] to run install.sh
+- Update railway.json to point to nixpacks.toml
+- Update install.sh to create venv before waiting for PyPI
+
+The issue was that buildCommand runs after the default install phase,
+so pip had already failed before our script ran.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com> (f8bf14b)
+
+- Fix(docs-chatbot): use railway.json for Railpack PyPI wait
+
+Railway now uses Railpack instead of Nixpacks. Update config:
+- Replace nixpacks.toml with railway.json
+- Force NIXPACKS builder with custom buildCommand
+- Fix install.sh version check using pip --dry-run
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com> (8c22356)
+
 ## [0.1.11] - 2025-12-02
 
 
