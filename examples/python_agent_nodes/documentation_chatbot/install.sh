@@ -4,6 +4,10 @@
 
 set -e
 
+# Set up virtual environment (replaces Nixpacks default install phase)
+python -m venv --copies /opt/venv
+. /opt/venv/bin/activate
+
 # Extract agentfield version requirement from requirements.txt
 AGENTFIELD_REQ=$(grep -E "^agentfield" requirements.txt || echo "")
 

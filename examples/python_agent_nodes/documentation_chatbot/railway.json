@@ -2,9 +2,9 @@
   "$schema": "https://railway.com/railway.schema.json",
   "build": {
     "builder": "NIXPACKS",
-    "buildCommand": "./install.sh"
+    "nixpacksConfigPath": "nixpacks.toml"
   },
   "deploy": {
-    "startCommand": "python -m agentfield.run"
+    "startCommand": "python main.py"
   }
 }
