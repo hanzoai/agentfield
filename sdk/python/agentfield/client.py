@@ -450,7 +450,11 @@ class AgentFieldClient:
 
     def register_node(self, node_data: Dict[str, Any]) -> Dict[str, Any]:
         """Register agent node with AgentField server"""
-        response = requests.post(f"{self.api_base}/nodes/register", json=node_data)
+        response = requests.post(
+            f"{self.api_base}/nodes/register",
+            json=node_data,
+            headers=self._get_auth_headers(),
+        )
         response.raise_for_status()  # Raise an exception for bad status codes
         return response.json()
 
@@ -459,14 +463,19 @@ class AgentFieldClient:
     ) -> Dict[str, Any]:
         """Update node health status"""
         response = requests.put(
-            f"{self.api_base}/nodes/{node_id}/health", json=health_data
+            f"{self.api_base}/nodes/{node_id}/health",
+            json=health_data,
+            headers=self._get_auth_headers(),
         )
         response.raise_for_status()  # Raise an exception for bad status codes
         return response.json()
 
     def get_nodes(self) -> Dict[str, Any]:
         """Get all registered nodes"""
-        response = requests.get(f"{self.api_base}/nodes")
+        response = requests.get(
+            f"{self.api_base}/nodes",
+            headers=self._get_auth_headers(),
+        )
         response.raise_for_status()  # Raise an exception for bad status codes
         return response.json()
 
@@ -536,6 +545,7 @@ class AgentFieldClient:
                 "POST",
                 f"{self.api_base}/nodes/register",
                 json=registration_data,
+                headers=self._get_auth_headers(),
                 timeout=30.0,
             )
             payload: Optional[Dict[str, Any]] = None
@@ -878,11 +888,13 @@ class AgentFieldClient:
             True if heartbeat was successful, False otherwise
         """
         try:
+            headers = {"Content-Type": "application/json"}
+            headers.update(self._get_auth_headers())
             response = await self._async_request(
                 "POST",
                 f"{self.api_base}/nodes/{node_id}/heartbeat",
                 json=heartbeat_data.to_dict(),
-                headers={"Content-Type": "application/json"},
+                headers=headers,
                 timeout=5.0,
             )
             response.raise_for_status()
@@ -904,10 +916,12 @@ class AgentFieldClient:
             True if heartbeat was successful, False otherwise
         """
         try:
+            headers = {"Content-Type": "application/json"}
+            headers.update(self._get_auth_headers())
             response = requests.post(
                 f"{self.api_base}/nodes/{node_id}/heartbeat",
                 json=heartbeat_data.to_dict(),
-                headers={"Content-Type": "application/json"},
+                headers=headers,
                 timeout=5.0,
             )
             response.raise_for_status()
@@ -926,10 +940,12 @@ class AgentFieldClient:
             True if notification was successful, False otherwise
         """
         try:
+            headers = {"Content-Type": "application/json"}
+            headers.update(self._get_auth_headers())
             response = await self._async_request(
                 "POST",
                 f"{self.api_base}/nodes/{node_id}/shutdown",
-                headers={"Content-Type": "application/json"},
+                headers=headers,
                 timeout=5.0,
             )
             response.raise_for_status()
@@ -948,9 +964,11 @@ class AgentFieldClient:
             True if notification was successful, False otherwise
         """
         try:
+            headers = {"Content-Type": "application/json"}
+            headers.update(self._get_auth_headers())
             response = requests.post(
                 f"{self.api_base}/nodes/{node_id}/shutdown",
-                headers={"Content-Type": "application/json"},
+                headers=headers,
                 timeout=5.0,
             )
             response.raise_for_status()
@@ -1016,6 +1034,7 @@ class AgentFieldClient:
                 "POST",
                 f"{self.api_base}/nodes/register",
                 json=registration_data,
+                headers=self._get_auth_headers(),
                 timeout=10.0,
             )
 

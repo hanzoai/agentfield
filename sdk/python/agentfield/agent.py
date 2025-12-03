@@ -726,10 +726,12 @@ class Agent(FastAPI):
         """Initialize DID and VC components."""
         try:
             # Initialize DID Manager
-            self.did_manager = DIDManager(self.agentfield_server, self.node_id)
+            self.did_manager = DIDManager(
+                self.agentfield_server, self.node_id, self.api_key
+            )
 
             # Initialize VC Generator
-            self.vc_generator = VCGenerator(self.agentfield_server)
+            self.vc_generator = VCGenerator(self.agentfield_server, self.api_key)
 
             if self.dev_mode:
                 log_debug("DID system initialized")
@@ -3216,7 +3218,10 @@ class Agent(FastAPI):
 
         url = self.agentfield_server.rstrip("/") + "/api/v1/workflow/executions/events"
         try:
-            response = requests.post(url, json=payload, timeout=5)
+            headers = {"Content-Type": "application/json"}
+            if self.api_key:
+                headers["X-API-Key"] = self.api_key
+            response = requests.post(url, json=payload, headers=headers, timeout=5)
             if response.status_code >= 400 and self.dev_mode:
                 log_warn(
                     f"Workflow event ({status}) for {component_id} failed: {response.status_code} {response.text}"

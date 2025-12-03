@@ -86,6 +86,7 @@ class StubAgent:
     base_url: Optional[str] = None
     version: str = "0.0.0"
     dev_mode: bool = False
+    api_key: Optional[str] = None
     ai_config: Any = None
     async_config: Any = None
     client: DummyAgentFieldClient = field(default_factory=DummyAgentFieldClient)
@@ -386,9 +387,10 @@ def create_test_agent(
             pass
 
     class _FakeDIDManager:
-        def __init__(self, agentfield_server: str, node: str):
+        def __init__(self, agentfield_server: str, node: str, api_key: Optional[str] = None):
             self.agentfield_server = agentfield_server
             self.node_id = node
+            self.api_key = api_key
             self.registered: Dict[str, Any] = {}
 
         def register_agent(self, reasoners: List[dict], skills: List[dict]) -> bool:
@@ -416,8 +418,9 @@ def create_test_agent(
             return f"did:agent:{self.node_id}"
 
     class _FakeVCGenerator:
-        def __init__(self, base_url: str):
+        def __init__(self, base_url: str, api_key: Optional[str] = None):
             self.base_url = base_url
+            self.api_key = api_key
             self._enabled = False
 
         def is_enabled(self) -> bool:
