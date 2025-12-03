@@ -357,6 +357,13 @@ class AgentFieldClient:
 
     async def _async_request(self, method: str, url: str, **kwargs):
         """Perform an HTTP request using the shared async client with sync fallback."""
+        # Inject API key into headers if available
+        if self.api_key:
+            if "headers" not in kwargs:
+                kwargs["headers"] = {}
+            if "X-API-Key" not in kwargs["headers"]:
+                kwargs["headers"]["X-API-Key"] = self.api_key
+
         try:
             client = await self.get_async_http_client()
         except RuntimeError:
