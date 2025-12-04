@@ -6,6 +6,83 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.20-rc.1] - 2025-12-04
+
+
+### Added
+
+- Feat(release): add two-tier staging/production release system (#53)
+
+* feat(release): add two-tier staging/production release system
+
+Implement automatic staging releases and manual production releases:
+
+- Staging: Automatic on push to main (TestPyPI, npm @next, staging-* Docker)
+- Production: Manual workflow dispatch (PyPI, npm @latest, vX.Y.Z + latest Docker)
+
+Changes:
+- Add push trigger with path filters for automatic staging
+- Replace release_channel with release_environment input
+- Split PyPI publishing: TestPyPI (staging) vs PyPI (production)
+- Split npm publishing: @next tag (staging) vs @latest (production)
+- Conditional Docker tagging: staging-X.Y.Z vs vX.Y.Z + latest
+- Add install-staging.sh for testing prerelease binaries
+- Update RELEASE.md with two-tier documentation
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+* refactor(install): consolidate staging into single install.sh with --staging flag
+
+Instead of separate install.sh and install-staging.sh scripts:
+- Single install.sh handles both production and staging
+- Use --staging flag or STAGING=1 env var for prerelease installs
+- Eliminates code drift between scripts
+
+Usage:
+  Production: curl -fsSL .../install.sh | bash
+  Staging:    curl -fsSL .../install.sh | bash -s -- --staging
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude <noreply@anthropic.com> (3bd748d)
+
+- Feat(sdk/typescript): expand AI provider support to 10 providers
+
+Add 6 new AI providers to the TypeScript SDK:
+- Google (Gemini models)
+- Mistral AI
+- Groq
+- xAI (Grok)
+- DeepSeek
+- Cohere
+
+Also add explicit handling for OpenRouter and Ollama with sensible defaults.
+
+Changes:
+- Update AIConfig type with new provider options
+- Refactor buildModel() with switch statement for all providers
+- Refactor buildEmbeddingModel() with proper embedding support
+  (Google, Mistral, Cohere have native embedding; others throw)
+- Add 27 unit tests for provider selection and embedding support
+- Install @ai-sdk/google, @ai-sdk/mistral, @ai-sdk/groq,
+  @ai-sdk/xai, @ai-sdk/deepseek, @ai-sdk/cohere packages
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com> (b06b5b5)
+
+
+
+### Other
+
+- Update versions (a7912f5)
+
 ## [0.1.19] - 2025-12-04
 
 
