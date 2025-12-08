@@ -58,7 +58,7 @@ We call this the AI Backend. Not a chatbot, not a copilot—infrastructure for s
 
 **Guided autonomy:** Agents that reason freely within boundaries you define. Predictable enough to trust. Flexible enough to be useful.
 
-📖 **[Read: The AI Backend](https://agentfield.ai/blog/ai-backend)** — Our thesis on why every serious backend will need a reasoning layer.
+📖 **[Read: The AI Backend](https://agentfield.ai/blog/posts/ai-backend)** — Our thesis on why every serious backend will need a reasoning layer.
 
 ---
 
