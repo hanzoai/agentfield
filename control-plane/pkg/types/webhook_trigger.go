@@ -57,3 +57,20 @@ type WebhookDelivery struct {
 	DurationMS      int64           `json:"duration_ms,omitempty" db:"duration_ms"`
 	StoredPayload   json.RawMessage `json:"-" db:"stored_payload"`
 }
+
+// WebhookTriggerFilters filters trigger listings.
+type WebhookTriggerFilters struct {
+	TeamID  *string `json:"team_id"`
+	Target  *string `json:"target"`
+	Enabled *bool   `json:"enabled"`
+	Limit   int     `json:"limit"`
+	AfterID *string `json:"after_id"`
+}
+
+// WebhookDeliveryFilters filters delivery listings.
+type WebhookDeliveryFilters struct {
+	TriggerID string  `json:"trigger_id"`
+	Status    *string `json:"status"`
+	Limit     int     `json:"limit"`
+	AfterID   *string `json:"after_id"`
+}
