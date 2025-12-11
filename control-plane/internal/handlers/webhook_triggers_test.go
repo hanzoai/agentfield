@@ -276,6 +276,12 @@ func TestWebhookRotateSecret(t *testing.T) {
 	require.True(t, stored.UpdatedAt.After(stored.CreatedAt))
 }
 
+func TestShellEscapeSingleQuotes(t *testing.T) {
+	in := "a'b c'd"
+	out := shellEscapeSingleQuotes(in)
+	require.Equal(t, "a'\"'\"'b c'\"'\"'d", out)
+}
+
 func newLocalTestStorage(t *testing.T) storage.StorageProvider {
 	t.Helper()
 	tempDir := t.TempDir()

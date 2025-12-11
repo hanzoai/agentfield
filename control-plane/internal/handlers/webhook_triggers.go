@@ -747,14 +747,24 @@ func decodePointerToken(raw string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(raw, "~1", "/"), "~0", "~")
 }
 
+// shellEscapeSingleQuotes safely escapes a string for inclusion in a single-quoted shell literal.
+// It replaces each ' with the POSIX-safe sequence '\” which closes the quote, inserts a literal
+// single quote, and reopens the quote.
+func shellEscapeSingleQuotes(input string) string {
+	return strings.ReplaceAll(input, `'`, `'"'"'`)
+}
+
 func buildCurlExample(webhookURL, signature string, body []byte) string {
+	escapedBody := shellEscapeSingleQuotes(string(body))
 	return `curl -X POST ` + webhookURL + ` \
   -H 'Content-Type: application/json' \
   -H 'X-AF-Signature: ` + signature + `' \
   -H 'X-AF-Timestamp: ` + exampleSignatureTimestamp + `' \
-  -d '` + string(body) + `'`
+  -d '` + escapedBody + `'`
 }
 
 func buildSignatureCommand(secret string, body []byte) string {
-	return `echo -n '` + exampleSignatureTimestamp + `.` + string(body) + `' | openssl dgst -sha256 -hmac '` + secret + `' | sed 's/^.* /sha256=/'`
+	escapedBody := shellEscapeSingleQuotes(string(body))
+	escapedSecret := shellEscapeSingleQuotes(secret)
+	return `echo -n '` + exampleSignatureTimestamp + `.` + escapedBody + `' | openssl dgst -sha256 -hmac '` + escapedSecret + `' | sed 's/^.* /sha256=/'`
 }
