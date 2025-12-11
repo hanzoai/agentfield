@@ -125,6 +125,15 @@ func TestWebhookDeliveryStoreAndList(t *testing.T) {
 	require.Len(t, acceptedList, 1)
 	require.Equal(t, "whd_1", acceptedList[0].ID)
 
+	require.NoError(t, ls.DeleteWebhookDelivery(ctx, accepted.ID))
+
+	remaining, err := ls.ListWebhookDeliveries(ctx, types.WebhookDeliveryFilters{
+		TriggerID: trigger.ID,
+	})
+	require.NoError(t, err)
+	require.Len(t, remaining, 1)
+	require.Equal(t, "whd_2", remaining[0].ID)
+
 	afterID := accepted.ID
 	older, err := ls.ListWebhookDeliveries(ctx, types.WebhookDeliveryFilters{
 		TriggerID: trigger.ID,

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -14,6 +15,8 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 	"github.com/gin-gonic/gin"
 )
+
+const exampleSignatureTimestamp = "1702342800"
 
 // WebhookHandlers serves the API-first inbound webhook functionality.
 type WebhookHandlers struct {
@@ -33,6 +36,7 @@ func (h *WebhookHandlers) RegisterRoutes(api *gin.RouterGroup) {
 		triggers.GET("/:id", h.GetTrigger)
 		triggers.GET("/:id/example", h.GetTriggerExample)
 		triggers.PATCH("/:id", h.UpdateTrigger)
+		triggers.POST("/:id/rotate-secret", h.RotateSecret)
 		triggers.DELETE("/:id", h.DeleteTrigger)
 		triggers.GET("/:id/deliveries", h.ListDeliveries)
 	}
@@ -65,7 +69,12 @@ func (h *WebhookHandlers) CreateTrigger(c *gin.Context) {
 	}
 
 	triggerID := utils.GenerateWebhookTriggerID()
-	secret := utils.GenerateWebhookSecret()
+	secret, err := utils.GenerateWebhookSecret()
+	if err != nil {
+		logger.Logger.Error().Err(err).Msg("failed to securely generate webhook secret")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to securely generate webhook secret"})
+		return
+	}
 
 	idemTTL := 24 * time.Hour
 	if strings.TrimSpace(req.IdempotencyTTL) != "" {
@@ -122,7 +131,8 @@ func (h *WebhookHandlers) CreateTrigger(c *gin.Context) {
 
 	webhookURL := h.buildWebhookURL(c, triggerID)
 	exampleSig := "<computed_signature>"
-	if sig, err := webhooks.ComputeSignature(secret, "1702342800", []byte(`{"your":"payload"}`)); err == nil {
+	exampleBody, exampleBodyBytes, mappedPreview := buildExampleData(trigger)
+	if sig, err := webhooks.ComputeSignature(secret, exampleSignatureTimestamp, exampleBodyBytes); err == nil {
 		exampleSig = sig
 	}
 
@@ -131,12 +141,11 @@ func (h *WebhookHandlers) CreateTrigger(c *gin.Context) {
 		"webhook_url": webhookURL,
 		"secret":      secret,
 		"example": gin.H{
-			"curl": `curl -X POST ` + webhookURL + ` \
-  -H 'Content-Type: application/json' \
-  -H 'X-AF-Signature: ` + exampleSig + `' \
-  -H 'X-AF-Timestamp: 1702342800' \
-  -d '{"your":"payload"}'`,
-			"signature_generation": `echo -n '1702342800.{"your":"payload"}' | openssl dgst -sha256 -hmac '` + secret + `' | sed 's/^.* /sha256=/'`,
+			"curl":                 buildCurlExample(webhookURL, exampleSig, exampleBodyBytes),
+			"signature_generation": buildSignatureCommand(secret, exampleBodyBytes),
+			"timestamp":            exampleSignatureTimestamp,
+			"body":                 exampleBody,
+			"mapped_input_preview": mappedPreview,
 		},
 		"created_at": now.Format(time.RFC3339),
 	})
@@ -206,8 +215,8 @@ func (h *WebhookHandlers) GetTriggerExample(c *gin.Context) {
 	}
 
 	webhookURL := h.buildWebhookURL(c, triggerID)
-	body := []byte(`{"your":"payload"}`)
-	exampleSig, _ := webhooks.ComputeSignature(trigger.SecretHash, "1702342800", body)
+	body, bodyBytes, mappedPreview := buildExampleData(trigger)
+	exampleSig, _ := webhooks.ComputeSignature(trigger.SecretHash, exampleSignatureTimestamp, bodyBytes)
 
 	c.JSON(http.StatusOK, gin.H{
 		"trigger_id":         triggerID,
@@ -220,18 +229,17 @@ func (h *WebhookHandlers) GetTriggerExample(c *gin.Context) {
 			"headers": gin.H{
 				"Content-Type":   "application/json",
 				"X-AF-Signature": exampleSig,
-				"X-AF-Timestamp": "1702342800",
+				"X-AF-Timestamp": exampleSignatureTimestamp,
 			},
-			"body": gin.H{
-				"example": "replace with your payload",
-			},
+			"body": body,
 		},
 		"signature_generation": gin.H{
 			"algorithm":       "HMAC-SHA256",
 			"payload_format":  "{timestamp}.{json_body}",
 			"header_format":   "sha256=<hex_signature>",
-			"example_command": `echo -n '1702342800.{"your":"payload"}' | openssl dgst -sha256 -hmac '` + trigger.SecretHash + `'`,
+			"example_command": buildSignatureCommand(trigger.SecretHash, bodyBytes),
 		},
+		"mapped_input_preview": mappedPreview,
 	})
 }
 
@@ -328,6 +336,47 @@ func (h *WebhookHandlers) UpdateTrigger(c *gin.Context) {
 	c.JSON(http.StatusOK, updated)
 }
 
+func (h *WebhookHandlers) RotateSecret(c *gin.Context) {
+	triggerID := c.Param("id")
+	trigger, err := h.store.GetWebhookTrigger(c.Request.Context(), triggerID)
+	if err != nil {
+		logger.Logger.Error().Err(err).Msg("failed to fetch webhook trigger for rotation")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to rotate webhook secret"})
+		return
+	}
+	if trigger == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "webhook trigger not found"})
+		return
+	}
+
+	newSecret, err := utils.GenerateWebhookSecret()
+	if err != nil {
+		logger.Logger.Error().Err(err).Msg("failed to securely generate webhook secret")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to securely generate webhook secret"})
+		return
+	}
+	updated, err := h.store.UpdateWebhookTrigger(c.Request.Context(), triggerID, func(current *types.WebhookTrigger) (*types.WebhookTrigger, error) {
+		current.SecretHash = newSecret
+		return current, nil
+	})
+	if err != nil {
+		logger.Logger.Error().Err(err).Msg("failed to rotate webhook secret")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to rotate webhook secret"})
+		return
+	}
+	if updated == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "webhook trigger not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"trigger_id": triggerID,
+		"new_secret": newSecret,
+		"rotated_at": updated.UpdatedAt.Format(time.RFC3339),
+		"message":    "Update your webhook provider with the new secret",
+	})
+}
+
 func (h *WebhookHandlers) DeleteTrigger(c *gin.Context) {
 	triggerID := c.Param("id")
 	if err := h.store.DeleteWebhookTrigger(c.Request.Context(), triggerID); err != nil {
@@ -377,6 +426,7 @@ func (h *WebhookHandlers) ReceiveWebhook(c *gin.Context) {
 		return
 	}
 
+	now := time.Now().UTC()
 	body, err := c.GetRawData()
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read request body"})
@@ -398,16 +448,29 @@ func (h *WebhookHandlers) ReceiveWebhook(c *gin.Context) {
 		}
 	}
 
+	var existingDelivery *types.WebhookDelivery
 	eventID, _ := webhooks.ExtractEventID(body, trigger.EventIDPointer)
 	if eventID != "" {
-		if existing, _ := h.store.FindDeliveryByEventID(c.Request.Context(), triggerID, eventID); existing != nil {
-			if trigger.IdempotencyTTL <= 0 || time.Since(existing.ReceivedAt) < trigger.IdempotencyTTL {
+		var lookupErr error
+		existingDelivery, lookupErr = h.store.FindDeliveryByEventID(c.Request.Context(), triggerID, eventID)
+		if lookupErr != nil {
+			logger.Logger.Error().Err(lookupErr).Msg("failed to check existing webhook delivery for idempotency")
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process webhook"})
+			return
+		}
+		if existingDelivery != nil {
+			if trigger.IdempotencyTTL <= 0 || now.Sub(existingDelivery.ReceivedAt) < trigger.IdempotencyTTL {
 				c.JSON(http.StatusOK, gin.H{
 					"status":       "duplicate",
-					"delivery_id":  existing.ID,
-					"execution_id": existing.ExecutionID,
+					"delivery_id":  existingDelivery.ID,
+					"execution_id": existingDelivery.ExecutionID,
 					"message":      "Event already processed (event_id: " + eventID + ")",
 				})
+				return
+			}
+			if err := h.store.DeleteWebhookDelivery(c.Request.Context(), existingDelivery.ID); err != nil {
+				logger.Logger.Error().Err(err).Msg("failed to evict expired idempotency record")
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process webhook"})
 				return
 			}
 		}
@@ -434,7 +497,6 @@ func (h *WebhookHandlers) ReceiveWebhook(c *gin.Context) {
 	}
 
 	mappedHash, _ := webhooks.HashMappedInput(mapped)
-	now := time.Now().UTC()
 	delivery := &types.WebhookDelivery{
 		ID:              utils.GenerateWebhookDeliveryID(),
 		TriggerID:       triggerID,
@@ -451,6 +513,18 @@ func (h *WebhookHandlers) ReceiveWebhook(c *gin.Context) {
 	}
 
 	if err := h.store.StoreWebhookDelivery(c.Request.Context(), delivery); err != nil {
+		if eventID != "" && isUniqueEventConstraint(err) {
+			if existingDelivery == nil {
+				existingDelivery, _ = h.store.FindDeliveryByEventID(c.Request.Context(), triggerID, eventID)
+			}
+			c.JSON(http.StatusOK, gin.H{
+				"status":       "duplicate",
+				"delivery_id":  safeDeliveryID(existingDelivery),
+				"execution_id": safeExecutionID(existingDelivery),
+				"message":      "Event already processed (event_id: " + eventID + ")",
+			})
+			return
+		}
 		logger.Logger.Error().Err(err).Msg("failed to store webhook delivery")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to store webhook delivery"})
 		return
@@ -494,4 +568,193 @@ func parsePositiveInt(raw string) (int, error) {
 		return 0, fmt.Errorf("value must be positive")
 	}
 	return val, nil
+}
+
+func isUniqueEventConstraint(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unique") &&
+		strings.Contains(msg, "webhook") &&
+		strings.Contains(msg, "event")
+}
+
+func safeDeliveryID(delivery *types.WebhookDelivery) string {
+	if delivery == nil {
+		return ""
+	}
+	return delivery.ID
+}
+
+func safeExecutionID(delivery *types.WebhookDelivery) string {
+	if delivery == nil {
+		return ""
+	}
+	return delivery.ExecutionID
+}
+
+func buildExampleData(trigger *types.WebhookTrigger) (map[string]interface{}, []byte, map[string]interface{}) {
+	payload := buildExamplePayload(trigger)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		body = []byte(`{"example":"payload"}`)
+	}
+
+	mapped, err := webhooks.MapPayload(body, trigger)
+	if err != nil {
+		mapped = map[string]interface{}{}
+	}
+	return payload, body, mapped
+}
+
+func buildExamplePayload(trigger *types.WebhookTrigger) map[string]interface{} {
+	payload := make(map[string]interface{})
+	if trigger == nil {
+		payload["example"] = "replace with your payload"
+		return payload
+	}
+
+	for field, pointer := range trigger.FieldMappings {
+		value := exampleValueForField(field, trigger.TypeCoercions[field])
+		_ = setPointerValue(payload, pointer, value)
+	}
+
+	if strings.TrimSpace(trigger.EventIDPointer) != "" {
+		_ = setPointerValue(payload, trigger.EventIDPointer, "evt_example_123")
+	}
+
+	if len(payload) == 0 {
+		payload["example"] = "replace with your payload"
+	}
+
+	return payload
+}
+
+func exampleValueForField(field, coercion string) interface{} {
+	lowerField := strings.ToLower(field)
+	switch strings.ToLower(coercion) {
+	case "int", "integer":
+		return 42
+	case "float", "float64", "double":
+		return 1.23
+	case "bool", "boolean":
+		return true
+	case "string":
+		return fmt.Sprintf("example-%s", field)
+	}
+	switch {
+	case strings.Contains(lowerField, "repo"):
+		return "org/repo"
+	case strings.Contains(lowerField, "url"):
+		return "https://example.com/resource"
+	case strings.Contains(lowerField, "id"):
+		return field + "-example"
+	case strings.Contains(lowerField, "name"):
+		return "example-name"
+	}
+	return fmt.Sprintf("example-%s", field)
+}
+
+func setPointerValue(target map[string]interface{}, pointer string, value interface{}) error {
+	if strings.TrimSpace(pointer) == "" || pointer == "/" {
+		target["example"] = value
+		return nil
+	}
+	if !strings.HasPrefix(pointer, "/") {
+		return fmt.Errorf("invalid json pointer %q", pointer)
+	}
+
+	current := interface{}(target)
+	var parentMap map[string]interface{}
+	var parentSlice []interface{}
+	var parentKey string
+	var parentIndex int
+
+	segments := strings.Split(pointer[1:], "/")
+	for i, raw := range segments {
+		token := decodePointerToken(raw)
+		last := i == len(segments)-1
+
+		switch node := current.(type) {
+		case map[string]interface{}:
+			next, ok := node[token]
+			if !ok {
+				if last {
+					node[token] = value
+					return nil
+				}
+				node[token] = allocateNextContainer(segments, i)
+				next = node[token]
+			}
+			if last {
+				node[token] = value
+				return nil
+			}
+			parentMap = node
+			parentSlice = nil
+			parentKey = token
+			current = next
+		case []interface{}:
+			index, err := strconv.Atoi(token)
+			if err != nil || index < 0 {
+				return fmt.Errorf("invalid array index %q", token)
+			}
+
+			if len(node) <= index {
+				resized := make([]interface{}, index+1)
+				copy(resized, node)
+				node = resized
+				if parentMap != nil {
+					parentMap[parentKey] = node
+				} else if parentSlice != nil {
+					parentSlice[parentIndex] = node
+				}
+			}
+
+			if last {
+				node[index] = value
+				return nil
+			}
+			if node[index] == nil {
+				node[index] = allocateNextContainer(segments, i)
+			}
+			parentMap = nil
+			parentSlice = node
+			parentIndex = index
+			current = node[index]
+		default:
+			return fmt.Errorf("cannot traverse pointer segment %q", token)
+		}
+	}
+
+	return nil
+}
+
+func allocateNextContainer(segments []string, current int) interface{} {
+	nextIdx := current + 1
+	if nextIdx >= len(segments) {
+		return make(map[string]interface{})
+	}
+
+	if _, err := strconv.Atoi(decodePointerToken(segments[nextIdx])); err == nil {
+		return make([]interface{}, 1)
+	}
+	return make(map[string]interface{})
+}
+
+func decodePointerToken(raw string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(raw, "~1", "/"), "~0", "~")
+}
+
+func buildCurlExample(webhookURL, signature string, body []byte) string {
+	return `curl -X POST ` + webhookURL + ` \
+  -H 'Content-Type: application/json' \
+  -H 'X-AF-Signature: ` + signature + `' \
+  -H 'X-AF-Timestamp: ` + exampleSignatureTimestamp + `' \
+  -d '` + string(body) + `'`
+}
+
+func buildSignatureCommand(secret string, body []byte) string {
+	return `echo -n '` + exampleSignatureTimestamp + `.` + string(body) + `' | openssl dgst -sha256 -hmac '` + secret + `' | sed 's/^.* /sha256=/'`
 }

@@ -345,6 +345,7 @@ func (s *stubStorage) DeleteWebhookTrigger(ctx context.Context, triggerID string
 func (s *stubStorage) StoreWebhookDelivery(ctx context.Context, delivery *types.WebhookDelivery) error {
 	return nil
 }
+func (s *stubStorage) DeleteWebhookDelivery(ctx context.Context, deliveryID string) error { return nil }
 func (s *stubStorage) FindDeliveryByEventID(ctx context.Context, triggerID, eventID string) (*types.WebhookDelivery, error) {
 	return nil, nil
 }

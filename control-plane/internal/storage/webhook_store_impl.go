@@ -372,6 +372,22 @@ func (ls *LocalStorage) StoreWebhookDelivery(ctx context.Context, delivery *type
 	return nil
 }
 
+// DeleteWebhookDelivery removes a delivery by ID. Used for idempotency eviction when TTL expires.
+func (ls *LocalStorage) DeleteWebhookDelivery(ctx context.Context, deliveryID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(deliveryID) == "" {
+		return fmt.Errorf("delivery id is required")
+	}
+
+	_, err := ls.db.ExecContext(ctx, `DELETE FROM webhook_deliveries WHERE id = ?`, deliveryID)
+	if err != nil {
+		return fmt.Errorf("delete webhook delivery: %w", err)
+	}
+	return nil
+}
+
 // FindDeliveryByEventID returns the first delivery for a given trigger/event ID pair.
 func (ls *LocalStorage) FindDeliveryByEventID(ctx context.Context, triggerID, eventID string) (*types.WebhookDelivery, error) {
 	if err := ctx.Err(); err != nil {

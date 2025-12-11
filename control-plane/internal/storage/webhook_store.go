@@ -15,6 +15,7 @@ type WebhookStore interface {
 	DeleteWebhookTrigger(ctx context.Context, triggerID string) error
 
 	StoreWebhookDelivery(ctx context.Context, delivery *types.WebhookDelivery) error
+	DeleteWebhookDelivery(ctx context.Context, deliveryID string) error
 	FindDeliveryByEventID(ctx context.Context, triggerID, eventID string) (*types.WebhookDelivery, error)
 	ListWebhookDeliveries(ctx context.Context, filters types.WebhookDeliveryFilters) ([]*types.WebhookDelivery, error)
 }

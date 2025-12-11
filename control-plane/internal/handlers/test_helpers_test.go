@@ -276,6 +276,13 @@ func (s *testExecutionStorage) StoreWebhookDelivery(ctx context.Context, deliver
 	return nil
 }
 
+func (s *testExecutionStorage) DeleteWebhookDelivery(ctx context.Context, deliveryID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.webhookDeliveries, deliveryID)
+	return nil
+}
+
 func (s *testExecutionStorage) FindDeliveryByEventID(ctx context.Context, triggerID, eventID string) (*types.WebhookDelivery, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
