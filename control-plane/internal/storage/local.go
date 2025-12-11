@@ -1604,6 +1604,62 @@ func (ls *LocalStorage) runMigrations() error {
 			description: "Add document size column to workflow_vcs",
 			sql:         `ALTER TABLE workflow_vcs ADD COLUMN document_size_bytes INTEGER DEFAULT 0;`,
 		},
+		{
+			version:     "016",
+			description: "Create webhook trigger and delivery tables",
+			sql: `
+				CREATE TABLE IF NOT EXISTS webhook_triggers (
+					id TEXT PRIMARY KEY,
+					name TEXT NOT NULL,
+					description TEXT,
+					target TEXT NOT NULL,
+					team_id TEXT NOT NULL DEFAULT 'default',
+					mode TEXT NOT NULL DEFAULT 'passthrough',
+					field_mappings JSONB,
+					defaults JSONB,
+					type_coercions JSONB,
+					secret_hash TEXT NOT NULL,
+					allowed_ips JSONB,
+					event_id_pointer TEXT,
+					idempotency_ttl_seconds INTEGER DEFAULT 86400,
+					async_execution BOOLEAN DEFAULT true,
+					max_duration_seconds INTEGER,
+					enabled BOOLEAN DEFAULT true,
+					created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					last_triggered_at TIMESTAMP,
+					trigger_count BIGINT DEFAULT 0
+				);
+				CREATE INDEX IF NOT EXISTS idx_webhook_triggers_team_id ON webhook_triggers(team_id);
+				CREATE INDEX IF NOT EXISTS idx_webhook_triggers_target ON webhook_triggers(target);
+				CREATE INDEX IF NOT EXISTS idx_webhook_triggers_enabled ON webhook_triggers(enabled);
+
+				CREATE TABLE IF NOT EXISTS webhook_deliveries (
+					id TEXT PRIMARY KEY,
+					trigger_id TEXT NOT NULL REFERENCES webhook_triggers(id) ON DELETE CASCADE,
+					event_id TEXT,
+					source_ip TEXT,
+					signature TEXT,
+					timestamp TEXT,
+					payload_hash TEXT NOT NULL,
+					payload_size INTEGER NOT NULL,
+					status TEXT NOT NULL,
+					error_code TEXT,
+					error_message TEXT,
+					mapped_input_hash TEXT,
+					execution_id TEXT,
+					received_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					processed_at TIMESTAMP,
+					duration_ms BIGINT,
+					stored_payload JSONB
+				);
+				CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_trigger_id ON webhook_deliveries(trigger_id);
+				CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_event_id ON webhook_deliveries(trigger_id, event_id);
+				CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_status ON webhook_deliveries(status);
+				CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_received_at ON webhook_deliveries(received_at DESC);
+				CREATE UNIQUE INDEX IF NOT EXISTS idx_webhook_deliveries_unique_event ON webhook_deliveries(trigger_id, event_id) WHERE event_id IS NOT NULL;
+			`,
+		},
 	}
 
 	// Apply each migration if not already applied

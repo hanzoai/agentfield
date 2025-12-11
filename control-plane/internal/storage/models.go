@@ -381,3 +381,50 @@ type ExecutionWebhookModel struct {
 }
 
 func (ExecutionWebhookModel) TableName() string { return "execution_webhooks" }
+
+type WebhookTriggerModel struct {
+	ID                    string     `gorm:"column:id;primaryKey"`
+	Name                  string     `gorm:"column:name;not null"`
+	Description           *string    `gorm:"column:description"`
+	Target                string     `gorm:"column:target;not null"`
+	TeamID                string     `gorm:"column:team_id;not null;index"`
+	Mode                  string     `gorm:"column:mode;not null;default:'passthrough'"`
+	FieldMappings         string     `gorm:"column:field_mappings;default:'{}'"`
+	Defaults              string     `gorm:"column:defaults;default:'{}'"`
+	TypeCoercions         string     `gorm:"column:type_coercions;default:'{}'"`
+	SecretHash            string     `gorm:"column:secret_hash;not null"`
+	AllowedIPs            string     `gorm:"column:allowed_ips;default:'[]'"`
+	EventIDPointer        *string    `gorm:"column:event_id_pointer"`
+	IdempotencyTTLSeconds int64      `gorm:"column:idempotency_ttl_seconds;default:86400"`
+	AsyncExecution        bool       `gorm:"column:async_execution;default:true"`
+	MaxDurationSeconds    *int64     `gorm:"column:max_duration_seconds"`
+	Enabled               bool       `gorm:"column:enabled;default:true;index"`
+	CreatedAt             time.Time  `gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt             time.Time  `gorm:"column:updated_at;autoUpdateTime"`
+	LastTriggeredAt       *time.Time `gorm:"column:last_triggered_at"`
+	TriggerCount          int64      `gorm:"column:trigger_count;default:0"`
+}
+
+func (WebhookTriggerModel) TableName() string { return "webhook_triggers" }
+
+type WebhookDeliveryModel struct {
+	ID              string     `gorm:"column:id;primaryKey"`
+	TriggerID       string     `gorm:"column:trigger_id;not null;index;constraint:OnDelete:CASCADE"`
+	EventID         *string    `gorm:"column:event_id"`
+	SourceIP        string     `gorm:"column:source_ip"`
+	Signature       *string    `gorm:"column:signature"`
+	Timestamp       *string    `gorm:"column:timestamp"`
+	PayloadHash     string     `gorm:"column:payload_hash;not null"`
+	PayloadSize     int        `gorm:"column:payload_size;not null"`
+	Status          string     `gorm:"column:status;not null;index"`
+	ErrorCode       *string    `gorm:"column:error_code"`
+	ErrorMessage    *string    `gorm:"column:error_message"`
+	MappedInputHash *string    `gorm:"column:mapped_input_hash"`
+	ExecutionID     *string    `gorm:"column:execution_id"`
+	ReceivedAt      time.Time  `gorm:"column:received_at;autoCreateTime;index"`
+	ProcessedAt     *time.Time `gorm:"column:processed_at"`
+	DurationMS      *int64     `gorm:"column:duration_ms"`
+	StoredPayload   string     `gorm:"column:stored_payload;default:'{}'"`
+}
+
+func (WebhookDeliveryModel) TableName() string { return "webhook_deliveries" }
