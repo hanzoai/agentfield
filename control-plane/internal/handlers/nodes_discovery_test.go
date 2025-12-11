@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 )
 
@@ -39,6 +40,7 @@ func TestResolveCallbackCandidatesSuccess(t *testing.T) {
 		context.Background(),
 		[]string{srv.URL},
 		"",
+		true,
 	)
 
 	if resolved == "" {
@@ -52,5 +54,35 @@ func TestResolveCallbackCandidatesSuccess(t *testing.T) {
 	}
 	if !results[0].Success {
 		t.Fatalf("expected probe success, got %+v", results[0])
+	}
+}
+
+func TestResolveCallbackCandidatesSkipsProbeWhenDisabled(t *testing.T) {
+	var hits int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	resolved, normalized, results := resolveCallbackCandidates(
+		context.Background(),
+		[]string{srv.URL},
+		"",
+		false,
+	)
+
+	if got := atomic.LoadInt32(&hits); got != 0 {
+		t.Fatalf("expected no probes when disabled, got %d requests", got)
+	}
+	if resolved != "" {
+		t.Fatalf("expected no resolved URL when probes are disabled, got %s", resolved)
+	}
+	if len(normalized) != 1 {
+		t.Fatalf("expected normalized candidates even when probes disabled, got %d", len(normalized))
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected no probe results when probing disabled, got %d", len(results))
 	}
 }

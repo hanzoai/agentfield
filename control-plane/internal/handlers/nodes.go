@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -32,7 +33,14 @@ func (rc *readCloser) Close() error {
 
 var validate = validator.New()
 
-// validateCallbackURL validates that a callback URL is properly formatted and reachable
+// callbackProbingEnabled returns true when operators opt in to callback URL probing.
+// Default is disabled to avoid SSRF from untrusted registrations.
+func callbackProbingEnabled() bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("AGENTFIELD_ENABLE_CALLBACK_PROBES")))
+	return value == "1" || value == "true" || value == "yes" || value == "on"
+}
+
+// validateCallbackURL validates that a callback URL is properly formatted.
 func validateCallbackURL(baseURL string) error {
 	if baseURL == "" {
 		return fmt.Errorf("base_url cannot be empty")
@@ -52,34 +60,6 @@ func validateCallbackURL(baseURL string) error {
 	// Ensure host is present
 	if parsedURL.Host == "" {
 		return fmt.Errorf("URL must include a host")
-	}
-
-	// Basic reachability test with timeout
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-	}
-
-	healthURL := strings.TrimSuffix(baseURL, "/") + "/health"
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, "GET", healthURL, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create health check request: %w", err)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		// Log the error but don't fail registration - agent might not be fully started yet
-		logger.Logger.Warn().Err(err).Msgf("⚠️ Callback URL health check failed for %s (agent may still be starting)", healthURL)
-		return nil
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		logger.Logger.Warn().Msgf("⚠️ Callback URL health check returned status %d for %s", resp.StatusCode, healthURL)
-	} else {
-		logger.Logger.Debug().Msgf("✅ Callback URL validated successfully: %s", baseURL)
 	}
 
 	return nil
@@ -241,12 +221,15 @@ func probeCandidate(ctx context.Context, client *http.Client, baseURL string) ty
 	return result
 }
 
-func resolveCallbackCandidates(ctx context.Context, rawCandidates []string, defaultPort string) (string, []string, []types.CallbackTestResult) {
+func resolveCallbackCandidates(ctx context.Context, rawCandidates []string, defaultPort string, enableProbes bool) (string, []string, []types.CallbackTestResult) {
 	if len(rawCandidates) == 0 {
 		return "", nil, nil
 	}
 
-	client := &http.Client{Timeout: 2 * time.Second}
+	var client *http.Client
+	if enableProbes {
+		client = &http.Client{Timeout: 2 * time.Second}
+	}
 	normalized := make([]string, 0, len(rawCandidates))
 	results := make([]types.CallbackTestResult, 0, len(rawCandidates))
 	seen := make(map[string]struct{})
@@ -263,6 +246,10 @@ func resolveCallbackCandidates(ctx context.Context, rawCandidates []string, defa
 		}
 		seen[normalizedURL] = struct{}{}
 		normalized = append(normalized, normalizedURL)
+
+		if !enableProbes {
+			continue
+		}
 
 		probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		result := probeCandidate(probeCtx, client, normalizedURL)
@@ -419,8 +406,12 @@ func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *ser
 
 		if len(candidateList) > 0 && !skipAutoDiscovery {
 			logger.Logger.Debug().Msgf("🔍 Auto-discovering callback URL for %s from %d candidates", newNode.ID, len(candidateList))
+			probeCallbacks := callbackProbingEnabled()
+			if !probeCallbacks {
+				logger.Logger.Debug().Msgf("⏭️ Callback URL probes disabled; normalizing candidates for %s without network calls", newNode.ID)
+			}
 			probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			resolvedBaseURL, normalizedCandidates, probeResults = resolveCallbackCandidates(probeCtx, candidateList, defaultPort)
+			resolvedBaseURL, normalizedCandidates, probeResults = resolveCallbackCandidates(probeCtx, candidateList, defaultPort, probeCallbacks)
 			cancel()
 
 			if resolvedBaseURL != "" && resolvedBaseURL != newNode.BaseURL {

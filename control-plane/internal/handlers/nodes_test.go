@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
@@ -23,6 +24,20 @@ func TestValidateCallbackURL_Valid(t *testing.T) {
 
 	err := validateCallbackURL(server.URL)
 	assert.NoError(t, err, "Should validate reachable callback URL")
+}
+
+func TestValidateCallbackURL_DoesNotProbeNetwork(t *testing.T) {
+	var hits int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.WriteHeader(http.StatusTeapot)
+	}))
+	defer server.Close()
+
+	err := validateCallbackURL(server.URL)
+	require.NoError(t, err, "Should only validate format")
+	assert.Equal(t, int32(0), atomic.LoadInt32(&hits), "validateCallbackURL should not perform network calls")
 }
 
 func TestValidateCallbackURL_Empty(t *testing.T) {
