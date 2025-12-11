@@ -61,6 +61,16 @@ type StorageProvider interface {
 	StoreWorkflowExecutionEvent(ctx context.Context, event *types.WorkflowExecutionEvent) error
 	ListWorkflowExecutionEvents(ctx context.Context, executionID string, afterSeq *int64, limit int) ([]*types.WorkflowExecutionEvent, error)
 
+	// Webhook trigger storage
+	CreateWebhookTrigger(ctx context.Context, trigger *types.WebhookTrigger) error
+	GetWebhookTrigger(ctx context.Context, triggerID string) (*types.WebhookTrigger, error)
+	ListWebhookTriggers(ctx context.Context, filters types.WebhookTriggerFilters) ([]*types.WebhookTrigger, error)
+	UpdateWebhookTrigger(ctx context.Context, triggerID string, update func(*types.WebhookTrigger) (*types.WebhookTrigger, error)) (*types.WebhookTrigger, error)
+	DeleteWebhookTrigger(ctx context.Context, triggerID string) error
+	StoreWebhookDelivery(ctx context.Context, delivery *types.WebhookDelivery) error
+	FindDeliveryByEventID(ctx context.Context, triggerID, eventID string) (*types.WebhookDelivery, error)
+	ListWebhookDeliveries(ctx context.Context, filters types.WebhookDeliveryFilters) ([]*types.WebhookDelivery, error)
+
 	// Execution cleanup operations
 	CleanupOldExecutions(ctx context.Context, retentionPeriod time.Duration, batchSize int) (int, error)
 	MarkStaleExecutions(ctx context.Context, staleAfter time.Duration, limit int) (int, error)

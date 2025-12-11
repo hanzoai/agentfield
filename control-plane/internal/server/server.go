@@ -942,6 +942,10 @@ func (s *AgentFieldServer) setupRoutes() {
 		agentAPI.GET("/memory/events/sse", memoryEventsHandler.SSEHandler)
 		agentAPI.GET("/memory/events/history", handlers.GetEventHistoryHandler(s.storage))
 
+		// Inbound webhooks
+		webhookHandlers := handlers.NewWebhookHandlers(s.storage)
+		webhookHandlers.RegisterRoutes(agentAPI)
+
 		// DID/VC endpoints - use service-backed handlers if DID is enabled
 		logger.Logger.Debug().
 			Bool("did_enabled", s.config.Features.DID.Enabled).

@@ -17,6 +17,8 @@ type testExecutionStorage struct {
 	runs                      map[string]*types.WorkflowRun
 	steps                     map[string]*types.WorkflowStep
 	webhooks                  map[string]*types.ExecutionWebhook
+	webhookTriggers           map[string]*types.WebhookTrigger
+	webhookDeliveries         map[string]*types.WebhookDelivery
 	eventBus                  *events.ExecutionEventBus
 	workflowExecutionEventBus *events.EventBus[*types.WorkflowExecutionEvent]
 	workflowRunEventBus       *events.EventBus[*types.WorkflowRunEvent]
@@ -31,6 +33,8 @@ func newTestExecutionStorage(agent *types.AgentNode) *testExecutionStorage {
 		runs:                      make(map[string]*types.WorkflowRun),
 		steps:                     make(map[string]*types.WorkflowStep),
 		webhooks:                  make(map[string]*types.ExecutionWebhook),
+		webhookTriggers:           make(map[string]*types.WebhookTrigger),
+		webhookDeliveries:         make(map[string]*types.WebhookDelivery),
 		eventBus:                  events.NewExecutionEventBus(),
 		workflowExecutionEventBus: events.NewEventBus[*types.WorkflowExecutionEvent](),
 		workflowRunEventBus:       events.NewEventBus[*types.WorkflowRunEvent](),
@@ -206,6 +210,97 @@ func (s *testExecutionStorage) RegisterExecutionWebhook(ctx context.Context, web
 	defer s.mu.Unlock()
 	s.webhooks[webhook.ExecutionID] = webhook
 	return nil
+}
+
+// Webhook trigger storage (basic in-memory impl for handler tests)
+func (s *testExecutionStorage) CreateWebhookTrigger(ctx context.Context, trigger *types.WebhookTrigger) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.webhookTriggers[trigger.ID] = trigger
+	return nil
+}
+
+func (s *testExecutionStorage) GetWebhookTrigger(ctx context.Context, triggerID string) (*types.WebhookTrigger, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if t, ok := s.webhookTriggers[triggerID]; ok {
+		return t, nil
+	}
+	return nil, nil
+}
+
+func (s *testExecutionStorage) ListWebhookTriggers(ctx context.Context, filters types.WebhookTriggerFilters) ([]*types.WebhookTrigger, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make([]*types.WebhookTrigger, 0, len(s.webhookTriggers))
+	for _, t := range s.webhookTriggers {
+		result = append(result, t)
+	}
+	return result, nil
+}
+
+func (s *testExecutionStorage) UpdateWebhookTrigger(ctx context.Context, triggerID string, update func(*types.WebhookTrigger) (*types.WebhookTrigger, error)) (*types.WebhookTrigger, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.webhookTriggers[triggerID]
+	if !ok {
+		return nil, nil
+	}
+	updated, err := update(current)
+	if err != nil {
+		return nil, err
+	}
+	if updated == nil {
+		updated = current
+	}
+	s.webhookTriggers[triggerID] = updated
+	return updated, nil
+}
+
+func (s *testExecutionStorage) DeleteWebhookTrigger(ctx context.Context, triggerID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.webhookTriggers, triggerID)
+	for id, d := range s.webhookDeliveries {
+		if d.TriggerID == triggerID {
+			delete(s.webhookDeliveries, id)
+		}
+	}
+	return nil
+}
+
+func (s *testExecutionStorage) StoreWebhookDelivery(ctx context.Context, delivery *types.WebhookDelivery) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.webhookDeliveries[delivery.ID] = delivery
+	return nil
+}
+
+func (s *testExecutionStorage) FindDeliveryByEventID(ctx context.Context, triggerID, eventID string) (*types.WebhookDelivery, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, d := range s.webhookDeliveries {
+		if d.TriggerID == triggerID && d.EventID == eventID {
+			return d, nil
+		}
+	}
+	return nil, nil
+}
+
+func (s *testExecutionStorage) ListWebhookDeliveries(ctx context.Context, filters types.WebhookDeliveryFilters) ([]*types.WebhookDelivery, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make([]*types.WebhookDelivery, 0)
+	for _, d := range s.webhookDeliveries {
+		if d.TriggerID != filters.TriggerID {
+			continue
+		}
+		if filters.Status != nil && *filters.Status != "" && d.Status != *filters.Status {
+			continue
+		}
+		result = append(result, d)
+	}
+	return result, nil
 }
 
 func (s *testExecutionStorage) CreateExecutionRecord(ctx context.Context, execution *types.Execution) error {

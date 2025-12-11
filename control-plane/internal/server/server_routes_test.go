@@ -327,6 +327,30 @@ func (s *stubStorage) ListWorkflowVCStatusSummaries(ctx context.Context, workflo
 func (s *stubStorage) StoreWorkflowVC(ctx context.Context, workflowVCID, workflowID, sessionID string, componentVCIDs []string, status string, startTime, endTime *time.Time, totalSteps, completedSteps int, storageURI string, documentSizeBytes int64) error {
 	return nil
 }
+
+// Inbound webhook storage stubs
+func (s *stubStorage) CreateWebhookTrigger(ctx context.Context, trigger *types.WebhookTrigger) error {
+	return nil
+}
+func (s *stubStorage) GetWebhookTrigger(ctx context.Context, triggerID string) (*types.WebhookTrigger, error) {
+	return nil, nil
+}
+func (s *stubStorage) ListWebhookTriggers(ctx context.Context, filters types.WebhookTriggerFilters) ([]*types.WebhookTrigger, error) {
+	return nil, nil
+}
+func (s *stubStorage) UpdateWebhookTrigger(ctx context.Context, triggerID string, update func(*types.WebhookTrigger) (*types.WebhookTrigger, error)) (*types.WebhookTrigger, error) {
+	return nil, nil
+}
+func (s *stubStorage) DeleteWebhookTrigger(ctx context.Context, triggerID string) error { return nil }
+func (s *stubStorage) StoreWebhookDelivery(ctx context.Context, delivery *types.WebhookDelivery) error {
+	return nil
+}
+func (s *stubStorage) FindDeliveryByEventID(ctx context.Context, triggerID, eventID string) (*types.WebhookDelivery, error) {
+	return nil, nil
+}
+func (s *stubStorage) ListWebhookDeliveries(ctx context.Context, filters types.WebhookDeliveryFilters) ([]*types.WebhookDelivery, error) {
+	return nil, nil
+}
 func (s *stubStorage) GetWorkflowVC(ctx context.Context, workflowVCID string) (*types.WorkflowVCInfo, error) {
 	return nil, nil
 }

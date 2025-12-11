@@ -35,6 +35,21 @@ func GenerateAgentFieldRequestID() string {
 	return fmt.Sprintf("req_%s_%s", timestamp, random)
 }
 
+// GenerateWebhookTriggerID generates an ID for inbound webhook triggers.
+func GenerateWebhookTriggerID() string {
+	return fmt.Sprintf("wht_%s", generateRandomString(12))
+}
+
+// GenerateWebhookDeliveryID generates an ID for webhook deliveries.
+func GenerateWebhookDeliveryID() string {
+	return fmt.Sprintf("whd_%s", generateRandomString(12))
+}
+
+// GenerateWebhookSecret generates a secret value shared with webhook senders.
+func GenerateWebhookSecret() string {
+	return fmt.Sprintf("whs_%s", generateRandomString(24))
+}
+
 // ValidateWorkflowID validates a workflow ID format
 func ValidateWorkflowID(workflowID string) bool {
 	// Basic validation - can be enhanced later
