@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.22-rc.4] - 2025-12-16
+
+
+### Fixed
+
+- Fix: wire up workflow notes SSE endpoint (#74)
+
+The StreamWorkflowNodeNotesHandler existed but was never registered
+in the routes. This adds the missing route registration for:
+GET /api/ui/v1/workflows/:workflowId/notes/events
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (c6f31cb)
+
 ## [0.1.22-rc.3] - 2025-12-16
 
 
