@@ -15,7 +15,7 @@ import os
 # Initialize agent
 app = Agent(
     node_id="hello-world",
-    agentfield_server="http://localhost:8080",
+    agentfield_server=os.getenv("AGENTFIELD_URL", "http://localhost:8080"),
     ai_config=AIConfig(
         model=os.getenv("SMALL_MODEL", "openai/gpt-4o-mini"), temperature=0.7
     ),

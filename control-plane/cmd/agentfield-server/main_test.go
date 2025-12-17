@@ -88,6 +88,42 @@ features:
 	}
 }
 
+func TestLoadConfig_VCRequirementsFromConfigFile(t *testing.T) {
+	viper.Reset()
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, "agentfield.yaml")
+	content := []byte(`agentfield:
+  port: 8080
+features:
+  did:
+    enabled: true
+    vc_requirements:
+      require_vc_registration: true
+      require_vc_execution: true
+      require_vc_cross_agent: true
+      persist_execution_vc: true
+`)
+	if err := os.WriteFile(file, content, 0o644); err != nil {
+		t.Fatalf("failed to write temp config: %v", err)
+	}
+
+	cfg, err := loadConfig(file)
+	if err != nil {
+		t.Fatalf("loadConfig returned error: %v", err)
+	}
+
+	if !cfg.Features.DID.Enabled {
+		t.Error("expected DID enabled from config")
+	}
+	if !cfg.Features.DID.VCRequirements.RequireVCForExecution {
+		t.Error("expected require_vc_execution=true from config")
+	}
+	if !cfg.Features.DID.VCRequirements.PersistExecutionVC {
+		t.Error("expected persist_execution_vc=true from config")
+	}
+}
+
 func TestBuildUI_SkipsWhenPackageJSONMissing(t *testing.T) {
 	cfg := &config.Config{UI: config.UIConfig{SourcePath: t.TempDir()}}
 

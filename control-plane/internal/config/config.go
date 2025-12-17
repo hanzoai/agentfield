@@ -57,38 +57,38 @@ type ExecutionQueueConfig struct {
 
 // FeatureConfig holds configuration for enabling/disabling features.
 type FeatureConfig struct {
-	DID DIDConfig `yaml:"did"`
+	DID DIDConfig `yaml:"did" mapstructure:"did"`
 }
 
 // DIDConfig holds configuration for DID identity system.
 type DIDConfig struct {
-	Enabled          bool           `yaml:"enabled" default:"true"`
-	Method           string         `yaml:"method" default:"did:key"`
-	KeyAlgorithm     string         `yaml:"key_algorithm" default:"Ed25519"`
-	DerivationMethod string         `yaml:"derivation_method" default:"BIP32"`
-	KeyRotationDays  int            `yaml:"key_rotation_days" default:"90"`
-	VCRequirements   VCRequirements `yaml:"vc_requirements"`
-	Keystore         KeystoreConfig `yaml:"keystore"`
+	Enabled          bool           `yaml:"enabled" mapstructure:"enabled" default:"true"`
+	Method           string         `yaml:"method" mapstructure:"method" default:"did:key"`
+	KeyAlgorithm     string         `yaml:"key_algorithm" mapstructure:"key_algorithm" default:"Ed25519"`
+	DerivationMethod string         `yaml:"derivation_method" mapstructure:"derivation_method" default:"BIP32"`
+	KeyRotationDays  int            `yaml:"key_rotation_days" mapstructure:"key_rotation_days" default:"90"`
+	VCRequirements   VCRequirements `yaml:"vc_requirements" mapstructure:"vc_requirements"`
+	Keystore         KeystoreConfig `yaml:"keystore" mapstructure:"keystore"`
 }
 
 // VCRequirements holds VC generation requirements.
 type VCRequirements struct {
-	RequireVCForRegistration bool   `yaml:"require_vc_registration" default:"true"`
-	RequireVCForExecution    bool   `yaml:"require_vc_execution" default:"true"`
-	RequireVCForCrossAgent   bool   `yaml:"require_vc_cross_agent" default:"true"`
-	StoreInputOutput         bool   `yaml:"store_input_output" default:"false"`
-	HashSensitiveData        bool   `yaml:"hash_sensitive_data" default:"true"`
-	PersistExecutionVC       bool   `yaml:"persist_execution_vc" default:"true"`
-	StorageMode              string `yaml:"storage_mode" default:"inline"`
+	RequireVCForRegistration bool   `yaml:"require_vc_registration" mapstructure:"require_vc_registration" default:"true"`
+	RequireVCForExecution    bool   `yaml:"require_vc_execution" mapstructure:"require_vc_execution" default:"true"`
+	RequireVCForCrossAgent   bool   `yaml:"require_vc_cross_agent" mapstructure:"require_vc_cross_agent" default:"true"`
+	StoreInputOutput         bool   `yaml:"store_input_output" mapstructure:"store_input_output" default:"false"`
+	HashSensitiveData        bool   `yaml:"hash_sensitive_data" mapstructure:"hash_sensitive_data" default:"true"`
+	PersistExecutionVC       bool   `yaml:"persist_execution_vc" mapstructure:"persist_execution_vc" default:"true"`
+	StorageMode              string `yaml:"storage_mode" mapstructure:"storage_mode" default:"inline"`
 }
 
 // KeystoreConfig holds keystore configuration.
 type KeystoreConfig struct {
-	Type           string `yaml:"type" default:"local"`
-	Path           string `yaml:"path" default:"./data/keys"`
-	Encryption     string `yaml:"encryption" default:"AES-256-GCM"`
-	BackupEnabled  bool   `yaml:"backup_enabled" default:"true"`
-	BackupInterval string `yaml:"backup_interval" default:"24h"`
+	Type           string `yaml:"type" mapstructure:"type" default:"local"`
+	Path           string `yaml:"path" mapstructure:"path" default:"./data/keys"`
+	Encryption     string `yaml:"encryption" mapstructure:"encryption" default:"AES-256-GCM"`
+	BackupEnabled  bool   `yaml:"backup_enabled" mapstructure:"backup_enabled" default:"true"`
+	BackupInterval string `yaml:"backup_interval" mapstructure:"backup_interval" default:"24h"`
 }
 
 // APIConfig holds configuration for API settings
