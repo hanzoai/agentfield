@@ -2,13 +2,17 @@
 
 Plain Kubernetes manifests for evaluating AgentField without Helm.
 
-If you want a values-driven install, use `deployments/helm/agentfield`.
+If you want a values-driven install, use [`deployments/helm/agentfield`](https://github.com/Agent-Field/agentfield/tree/main/deployments/helm/agentfield).
+
+**Source files:** [Base manifests](https://github.com/Agent-Field/agentfield/tree/main/deployments/kubernetes/base) | [Overlays](https://github.com/Agent-Field/agentfield/tree/main/deployments/kubernetes/overlays)
 
 ## Choose an overlay
 
-- `deployments/kubernetes/overlays/python-demo`: control plane + a small Python agent (good default)
-- `deployments/kubernetes/overlays/local-demo`: control plane + Go demo agent (requires a custom image)
-- `deployments/kubernetes/overlays/postgres-demo`: PostgreSQL + Go demo agent (production-like storage)
+| Overlay | Description | Source |
+|---------|-------------|--------|
+| `python-demo` | Control plane + a small Python agent (good default) | [View](https://github.com/Agent-Field/agentfield/tree/main/deployments/kubernetes/overlays/python-demo) |
+| `local-demo` | Control plane + Go demo agent (requires a custom image) | [View](https://github.com/Agent-Field/agentfield/tree/main/deployments/kubernetes/overlays/local-demo) |
+| `postgres-demo` | PostgreSQL + Go demo agent (production-like storage) | [View](https://github.com/Agent-Field/agentfield/tree/main/deployments/kubernetes/overlays/postgres-demo) |
 
 If you use `local-demo` or `postgres-demo`, build and load the Go demo agent image first (example for Minikube):
 
@@ -16,6 +20,8 @@ If you use `local-demo` or `postgres-demo`, build and load the Go demo agent ima
 docker build -t agentfield-demo-go-agent:local -f deployments/docker/Dockerfile.demo-go-agent .
 minikube image load agentfield-demo-go-agent:local
 ```
+
+> See the [Dockerfile.demo-go-agent](https://github.com/Agent-Field/agentfield/blob/main/deployments/docker/Dockerfile.demo-go-agent) for build details.
 
 ## Quick start
 

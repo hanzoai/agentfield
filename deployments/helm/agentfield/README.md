@@ -2,6 +2,8 @@
 
 This chart installs the AgentField control plane and optional demo agents.
 
+**Source files:** [Chart.yaml](https://github.com/Agent-Field/agentfield/blob/main/deployments/helm/agentfield/Chart.yaml) | [values.yaml](https://github.com/Agent-Field/agentfield/blob/main/deployments/helm/agentfield/values.yaml) | [Templates](https://github.com/Agent-Field/agentfield/tree/main/deployments/helm/agentfield/templates)
+
 ## Quick start (recommended)
 
 Install with PostgreSQL and the demo Python agent (no custom image required):
@@ -67,6 +69,8 @@ For Minikube, build and load the default image used by the chart:
 docker build -t agentfield-demo-go-agent:local -f deployments/docker/Dockerfile.demo-go-agent .
 minikube image load agentfield-demo-go-agent:local
 ```
+
+> See the [Dockerfile.demo-go-agent](https://github.com/Agent-Field/agentfield/blob/main/deployments/docker/Dockerfile.demo-go-agent) for build details.
 
 ```bash
 helm upgrade --install agentfield deployments/helm/agentfield \
