@@ -9,6 +9,5 @@ resources:
   - demo-agent-deployment.yaml
   - demo-agent-service.yaml
 
-patchesStrategicMerge:
-  - patch-control-plane-postgres.yaml
-
+patches:
+  - path: patch-control-plane-postgres.yaml

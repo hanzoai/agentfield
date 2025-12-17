@@ -27,7 +27,7 @@ spec:
             - name: AGENTFIELD_HOME
               value: "/data"
             - name: AGENTFIELD_CONFIG_FILE
-              value: "/etc/agentfield/config/agentfield.yaml"
+              value: "/dev/null"
             - name: AGENTFIELD_STORAGE_MODE
               value: "local"
           volumeMounts:
@@ -51,4 +51,3 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: agentfield-control-plane-data
-

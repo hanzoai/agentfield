@@ -20,6 +20,12 @@ Port-forward the UI/API:
 kubectl -n agentfield port-forward svc/agentfield-control-plane 8080:8080
 ```
 
+Wait for the demo agent to become ready (first run installs Python deps):
+
+```bash
+kubectl -n agentfield wait --for=condition=Ready pod -l app.kubernetes.io/component=demo-python-agent --timeout=600s
+```
+
 Open:
 - `http://localhost:8080/ui/`
 
@@ -55,6 +61,13 @@ helm upgrade --install agentfield deployments/helm/agentfield \
 
 The Go demo agent is useful, but you must build/push/load an image that your cluster can pull.
 
+For Minikube, build and load the default image used by the chart:
+
+```bash
+docker build -t agentfield-demo-go-agent:local -f deployments/docker/Dockerfile.demo-go-agent .
+minikube image load agentfield-demo-go-agent:local
+```
+
 ```bash
 helm upgrade --install agentfield deployments/helm/agentfield \
   -n agentfield --create-namespace \
@@ -68,6 +81,12 @@ helm upgrade --install agentfield deployments/helm/agentfield \
   -n agentfield --create-namespace \
   --set apiAuth.enabled=true \
   --set apiAuth.apiKey='change-me'
+```
+
+When auth is enabled, API calls must include the key (UI remains accessible):
+
+```bash
+curl -H "X-API-Key: change-me" http://localhost:8080/api/v1/nodes
 ```
 
 ## Notes
