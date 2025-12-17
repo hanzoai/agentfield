@@ -23,7 +23,14 @@ spec:
               do echo "waiting for control plane"; sleep 2; done
       containers:
         - name: demo-python-agent
-          image: agentfield-demo-python-agent:local
+          image: python:3.11-slim
+          command:
+            - sh
+            - -c
+            - >
+              python -m pip install --no-cache-dir --upgrade pip &&
+              python -m pip install --no-cache-dir agentfield &&
+              python /app/main.py
           ports:
             - name: http
               containerPort: 8001
@@ -36,6 +43,9 @@ spec:
               value: "8001"
             - name: AGENT_CALLBACK_URL
               value: http://agentfield-demo-python-agent:8001
+          volumeMounts:
+            - name: app
+              mountPath: /app
           livenessProbe:
             httpGet:
               path: /health
@@ -48,4 +58,8 @@ spec:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 5
+      volumes:
+        - name: app
+          configMap:
+            name: agentfield-demo-python-agent
 

@@ -1,94 +1,78 @@
-# Kubernetes Manifests (Kustomize)
+# Kubernetes (Kustomize)
 
-This directory contains reference Kubernetes manifests for evaluating AgentField without Helm.
+Plain Kubernetes manifests for evaluating AgentField without Helm.
 
-If you prefer Helm, use `deployments/helm/agentfield` instead.
+If you want a values-driven install, use `deployments/helm/agentfield`.
 
-## Variants
+## Choose an overlay
 
-- `deployments/kubernetes/base` – Control plane with local storage (SQLite/BoltDB) persisted in a PVC.
-- `deployments/kubernetes/overlays/local-demo` – Base + demo Go agent (validates registration + execution).
-- `deployments/kubernetes/overlays/python-demo` – Base + demo Python agent (validates VC generation via Python SDK).
-- `deployments/kubernetes/overlays/postgres-demo` – Base + pgvector PostgreSQL + demo Go agent.
+- `deployments/kubernetes/overlays/python-demo`: control plane + a small Python agent (good default)
+- `deployments/kubernetes/overlays/local-demo`: control plane + Go demo agent (requires a custom image)
+- `deployments/kubernetes/overlays/postgres-demo`: PostgreSQL + Go demo agent (production-like storage)
 
-## Quick Start (local cluster)
+## Quick start
 
-### 1) Create a namespace (optional)
+### 1) Namespace
 
 ```bash
 kubectl create namespace agentfield --dry-run=client -o yaml | kubectl apply -f -
 kubectl config set-context --current --namespace=agentfield
 ```
 
-### 2) Apply an overlay
-
-Local storage + demo agent:
-
-```bash
-kubectl apply -k deployments/kubernetes/overlays/local-demo
-```
-
-Python demo agent (requires loading local images into your cluster, see below):
+### 2) Apply (recommended)
 
 ```bash
 kubectl apply -k deployments/kubernetes/overlays/python-demo
 ```
 
-Postgres + demo agent:
-
-```bash
-kubectl apply -k deployments/kubernetes/overlays/postgres-demo
-```
-
-### 3) Port-forward the UI
+### 3) Port-forward UI/API
 
 ```bash
 kubectl port-forward svc/agentfield-control-plane 8080:8080
-open http://localhost:8080
 ```
 
-Notes:
-- `kubectl port-forward` must keep running in that terminal; if you stop it, `http://localhost:8080` will not respond.
-- If your browser shows a blank page, open the UI directly at `http://localhost:8080/ui/`.
-- Quick sanity check from a terminal: `curl -s http://localhost:8080/api/v1/health`.
+Open:
+- `http://localhost:8080/ui/`
 
-### 4) Test an execution
+Sanity check:
+```bash
+curl -s http://localhost:8080/api/v1/health
+```
+
+### 4) Execute an agent via the control plane
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/execute/demo-go-agent.demo_echo \
+curl -X POST http://localhost:8080/api/v1/execute/demo-python-agent.hello \
   -H "Content-Type: application/json" \
-  -d '{"input": {"message": "Hello!"}}'
+  -d '{"input":{"name":"World"}}'
 ```
 
-## Demo Python agent on minikube
-
-This overlay uses local images:
-- `agentfield-control-plane:local`
-- `agentfield-demo-python-agent:local`
-
-Build them and load into minikube:
-
-```bash
-docker build -f deployments/docker/Dockerfile.control-plane -t agentfield-control-plane:local .
-docker build -f deployments/docker/Dockerfile.demo-python-agent -t agentfield-demo-python-agent:local .
-minikube image load agentfield-control-plane:local
-minikube image load agentfield-demo-python-agent:local
-kubectl apply -k deployments/kubernetes/overlays/python-demo
-```
-
-Then execute (copy `run_id` from the response) and fetch the VC chain:
+### 5) Check VCs (optional)
 
 ```bash
 resp=$(curl -s -X POST http://localhost:8080/api/v1/execute/demo-python-agent.hello \
   -H "Content-Type: application/json" \
   -d '{"input":{"name":"VC"}}')
-echo "$resp"
 run_id=$(echo "$resp" | python3 -c 'import sys,json; print(json.load(sys.stdin)["run_id"])')
 curl -s http://localhost:8080/api/v1/did/workflow/$run_id/vc-chain | head -c 1200
 ```
 
+## Other overlays
+
+Go demo agent (requires building a custom image):
+```bash
+docker build -f deployments/docker/Dockerfile.demo-go-agent -t agentfield-demo-go-agent:local .
+# Load into your cluster (e.g., minikube image load agentfield-demo-go-agent:local)
+kubectl apply -k deployments/kubernetes/overlays/local-demo
+```
+
+PostgreSQL + Go demo agent:
+```bash
+kubectl apply -k deployments/kubernetes/overlays/postgres-demo
+```
+
 ## Notes
 
-- The demo agent image is referenced as `agentfield-demo-go-agent:local`. Build/push/load it for your cluster:
-  - Dockerfile: `deployments/docker/Dockerfile.demo-go-agent`
-- For Kubernetes agent nodes, set their registered URL to a `Service` DNS name (`AGENT_PUBLIC_URL` / `AGENT_CALLBACK_URL`), not `localhost`.
+- The Python demo agent installs the SDK at startup; your cluster needs outbound network access.
+- For agent nodes, always register a `Service` DNS name (`AGENT_PUBLIC_URL` / `AGENT_CALLBACK_URL`), not `localhost`.
+

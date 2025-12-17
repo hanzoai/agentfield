@@ -3,11 +3,7 @@ kind: Kustomization
 
 resources:
   - ../../base
+  - demo-python-agent-configmap.yaml
   - demo-python-agent-deployment.yaml
   - demo-python-agent-service.yaml
-
-images:
-  - name: ghcr.io/agent-field/agentfield-control-plane
-    newName: agentfield-control-plane
-    newTag: local
 
