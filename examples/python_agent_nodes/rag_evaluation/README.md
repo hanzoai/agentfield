@@ -2,6 +2,8 @@
 
 Multi-reasoner evaluation system for RAG-generated responses featuring adversarial debate, jury consensus, and hybrid ML+LLM verification.
 
+> **[Full Documentation](https://agentfield.dev/examples/complete-agents/rag-evaluator)** - Detailed architecture diagrams, API examples, and deployment guides.
+
 ## Features
 
 - **4 Evaluation Metrics** with unique multi-reasoner architectures
