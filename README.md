@@ -225,14 +225,26 @@ af init my-agent  # No --defaults flag
 <details>
 <summary><strong>Docker / Troubleshooting</strong></summary>
 
-If running AgentField in Docker, set a callback URL so the Control Plane can reach your agent:
+If running the **control plane in Docker** and your **agent node runs outside that container**, make sure the control plane can reach the agent at the URL it registers.
+
+**Option A (agent on your host, control plane in Docker):**
 ```bash
 docker run -p 8080:8080 ghcr.io/agent-field/agentfield-control-plane:latest
-```
-for agent nodes
-```bash
+
+# Python agents (recommended)
+export AGENTFIELD_URL="http://localhost:8080"
 export AGENT_CALLBACK_URL="http://host.docker.internal:8001"
+python main.py
+
+# Go agents
+export AGENTFIELD_URL="http://localhost:8080"
+export AGENT_PUBLIC_URL="http://host.docker.internal:8001"
 ```
+
+**Option B (agent + control plane both in Docker Compose / same network):**
+- Set the agent callback/public URL to the agent container's service name, e.g. `http://my-agent:8001`.
+
+**Linux note:** `host.docker.internal` may require `--add-host=host.docker.internal:host-gateway` or using a Compose setup where both containers share a network.
 </details>
 
 **Next Steps:** [Build Your First Agent](https://agentfield.ai/guides/getting-started/build-your-first-agent) | [Deploy to Production](https://agentfield.ai/guides/deployment/overview) | [Examples](https://agentfield.ai/examples)

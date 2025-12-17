@@ -1,4 +1,6 @@
-// UI embedding and route registration for AgentField
+//go:build embedded
+
+// UI embedding and route registration for AgentField (embedded build).
 
 package client
 
