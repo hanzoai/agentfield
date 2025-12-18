@@ -10,6 +10,9 @@ on:
     paths:
       - '.github/workflows/update-download-stats.yml'
 
+permissions:
+  contents: read
+
 jobs:
   update-stats:
     runs-on: ubuntu-latest
