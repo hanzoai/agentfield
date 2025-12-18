@@ -3,7 +3,12 @@ name: Update Download Stats
 on:
   schedule:
     - cron: '0 */6 * * *'  # Every 6 hours
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:  # Manual trigger from Actions tab
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/update-download-stats.yml'
 
 jobs:
   update-stats:
