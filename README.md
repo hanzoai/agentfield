@@ -9,7 +9,7 @@
 *When AI moves from chatbots into backends, making decisions, not just answering questions, it needs infrastructure, not frameworks.*
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-7c3aed.svg?style=flat&labelColor=1e1e2e)](LICENSE)
-[![Downloads](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/santoshkumarradha/d98e2ad73502b4075f6a5f0ae4f5cae5/raw/agentfield-stats.json&style=flat&logo=download&logoColor=white&labelColor=1e1e2e)](https://github.com/Agent-Field/agentfield)
+[![Downloads](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/santoshkumarradha/d98e2ad73502b4075f6a5f0ae4f5cae5/raw/badge.json&style=flat&logo=download&logoColor=white&labelColor=1e1e2e)](https://github.com/Agent-Field/agentfield)
 [![Last Commit](https://img.shields.io/github/last-commit/Agent-Field/agentfield?style=flat&logo=git&logoColor=white&color=7c3aed&labelColor=1e1e2e)](https://github.com/Agent-Field/agentfield/commits/main)
 [![Go](https://img.shields.io/badge/go-1.21+-00ADD8.svg?style=flat&labelColor=1e1e2e&logo=go&logoColor=white)](https://go.dev/)
 [![Python](https://img.shields.io/badge/python-3.9+-3776AB.svg?style=flat&labelColor=1e1e2e&logo=python&logoColor=white)](https://www.python.org/)

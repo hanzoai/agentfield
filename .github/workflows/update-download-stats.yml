@@ -82,13 +82,16 @@ jobs:
               return num.toString();
             }
 
-            // Create stats object (shields.io endpoint format + extra data)
-            const stats = {
+            // Create badge object (shields.io compatible - no extra fields)
+            const badge = {
               schemaVersion: 1,
               label: 'downloads',
               message: formatNumber(total),
-              color: '7c3aed',
-              // Extra fields for reference
+              color: '7c3aed'
+            };
+
+            // Create full stats object for reference
+            const stats = {
               total: total,
               sources: {
                 github: githubDownloads,
@@ -98,14 +101,18 @@ jobs:
               lastUpdated: new Date().toISOString()
             };
 
-            // Update Gist
+            // Update Gist with both files
             await github.rest.gists.update({
               gist_id: process.env.GIST_ID,
               files: {
-                'agentfield-stats.json': {
+                'badge.json': {
+                  content: JSON.stringify(badge, null, 2)
+                },
+                'stats.json': {
                   content: JSON.stringify(stats, null, 2)
                 }
               }
             });
 
-            console.log('Stats updated successfully:', JSON.stringify(stats, null, 2));
+            console.log('Badge:', JSON.stringify(badge, null, 2));
+            console.log('Stats:', JSON.stringify(stats, null, 2));
