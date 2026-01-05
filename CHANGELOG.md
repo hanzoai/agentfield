@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.28-rc.3] - 2026-01-05
+
+
+### Fixed
+
+- Fix(control-plane): enforce lifecycle_status consistency with agent state (#130)
+
+When agents go offline, the control plane was incorrectly keeping
+lifecycle_status as "ready" even though health_status correctly showed
+"inactive". This caused observability webhooks to receive inconsistent
+data where offline nodes appeared online based on lifecycle_status.
+
+Changes:
+- Add defensive lifecycle_status enforcement in persistStatus()
+  to ensure consistency with agent state before writing to storage
+- Update health_monitor.go fallback paths to also update lifecycle_status
+- Add SystemStateSnapshot event type for periodic agent inventory
+- Enhance execution events with full reasoner context and metadata
+- Add ListAgents to ObservabilityWebhookStore interface for snapshots
+
+The fix ensures both node_offline events and system_state_snapshot
+events (every 60s) correctly report lifecycle_status: "offline" for
+offline agents.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-authored-by: Claude <noreply@anthropic.com> (67c67c4)
+
 ## [0.1.28-rc.2] - 2026-01-05
 
 
