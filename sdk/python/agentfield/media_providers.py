@@ -313,9 +313,10 @@ class FalProvider(MediaProvider):
             if "images" in result:
                 for img_data in result["images"]:
                     url = img_data.get("url")
-                    width = img_data.get("width")
-                    height = img_data.get("height")
-                    content_type = img_data.get("content_type", "image/png")
+                    # width, height, content_type available but not used currently
+                    # _width = img_data.get("width")
+                    # _height = img_data.get("height")
+                    # _content_type = img_data.get("content_type", "image/png")
 
                     if url:
                         images.append(

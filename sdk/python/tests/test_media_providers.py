@@ -9,8 +9,6 @@ This module tests:
 """
 
 import copy
-import sys
-import types
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -374,7 +372,7 @@ class TestAgentAIProviderRouting:
         mock_provider.generate_image = mock_generate
         ai._fal_provider_instance = mock_provider
 
-        result = await ai.ai_with_vision(
+        await ai.ai_with_vision(
             prompt="A sunset",
             model="fal/flux-dev",
         )

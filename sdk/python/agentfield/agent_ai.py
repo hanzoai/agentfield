@@ -1,7 +1,12 @@
+from __future__ import annotations
+
 import json
 import os
 import re
-from typing import Any, Dict, List, Literal, Optional, Type, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, Union
+
+if TYPE_CHECKING:
+    from agentfield.multimodal_response import MultimodalResponse
 
 import requests
 from agentfield.agent_utils import AgentUtils
