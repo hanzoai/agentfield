@@ -76,6 +76,23 @@ class AgentAI:
         self.agent = agent_instance
         self._initialization_complete = False
         self._rate_limiter = None
+        self._fal_provider_instance = None
+
+    @property
+    def _fal_provider(self):
+        """
+        Lazy-initialized Fal provider for image, audio, and video generation.
+
+        Returns:
+            FalProvider: Configured Fal.ai provider instance
+        """
+        if self._fal_provider_instance is None:
+            from agentfield.media_providers import FalProvider
+
+            self._fal_provider_instance = FalProvider(
+                api_key=self.agent.ai_config.fal_api_key
+            )
+        return self._fal_provider_instance
 
     def _get_rate_limiter(self) -> StatelessRateLimiter:
         """
@@ -819,6 +836,21 @@ class AgentAI:
                 self.agent.ai_config.audio_model
             )  # Use configured audio model (defaults to tts-1)
 
+        # Route based on model prefix - Fal TTS models
+        if model.startswith("fal-ai/") or model.startswith("fal/"):
+            # Combine all text inputs
+            text_input = " ".join(str(arg) for arg in args if isinstance(arg, str))
+            if not text_input:
+                text_input = "Hello, this is a test audio message."
+
+            return await self._fal_provider.generate_audio(
+                text=text_input,
+                model=model,
+                voice=voice,
+                format=format,
+                **kwargs,
+            )
+
         # Check if mode="openai_direct" is specified
         if mode == "openai_direct":
             # Use direct OpenAI client with streaming response
@@ -1087,7 +1119,16 @@ class AgentAI:
             model = "dall-e-3"  # Default image model
 
         # Route based on model prefix
-        if model.startswith("openrouter/"):
+        if model.startswith("fal-ai/") or model.startswith("fal/"):
+            # Fal: Use FalProvider for Flux, SDXL, Recraft, etc.
+            return await self._fal_provider.generate_image(
+                prompt=prompt,
+                model=model,
+                size=size,
+                quality=quality,
+                **kwargs,
+            )
+        elif model.startswith("openrouter/"):
             # OpenRouter: Use chat completions API with image modality
             return await vision.generate_image_openrouter(
                 prompt=prompt,
@@ -1176,12 +1217,13 @@ class AgentAI:
         Supported Providers:
         - LiteLLM: DALL-E models like "dall-e-3", "dall-e-2"
         - OpenRouter: Models like "openrouter/google/gemini-2.5-flash-image-preview"
-        - Future: Fal.ai models like "fal/flux-pro"
+        - Fal.ai: Models like "fal-ai/flux/dev", "fal-ai/flux/schnell", "fal-ai/recraft-v3"
 
         Args:
             prompt: Text description of the image to generate
             model: Model to use (defaults to AIConfig.vision_model, typically "dall-e-3")
-            size: Image dimensions (e.g., "1024x1024", "1792x1024", "1024x1792")
+            size: Image dimensions (e.g., "1024x1024", "1792x1024") or Fal presets
+                  ("square_hd", "landscape_16_9", "portrait_4_3")
             quality: Image quality ("standard" or "hd")
             style: Image style for DALL-E 3 ("vivid" or "natural")
             response_format: Output format ("url" or "b64_json")
@@ -1212,6 +1254,21 @@ class AgentAI:
                 model="dall-e-3",
                 quality="hd",
                 style="natural"
+            )
+
+            # Fal.ai Flux (fast, high quality)
+            result = await app.ai_generate_image(
+                "A cyberpunk cityscape",
+                model="fal-ai/flux/dev",
+                size="landscape_16_9",
+                num_images=2
+            )
+
+            # Fal.ai Flux Schnell (fastest)
+            result = await app.ai_generate_image(
+                "A serene Japanese garden",
+                model="fal-ai/flux/schnell",
+                size="square_hd"
             )
         """
         # Use configured vision/image model as default
@@ -1245,8 +1302,8 @@ class AgentAI:
         generated audio.
 
         Supported Providers:
-        - OpenAI TTS: Models like "tts-1", "tts-1-hd", "gpt-4o-mini-tts"
-        - Future: ElevenLabs, Fal.ai audio models
+        - LiteLLM: OpenAI TTS models like "tts-1", "tts-1-hd", "gpt-4o-mini-tts"
+        - Fal.ai: TTS models like "fal-ai/kokoro/..." (custom deployments)
 
         Args:
             text: Text to convert to speech
@@ -1293,5 +1350,133 @@ class AgentAI:
             voice=voice,
             format=format,
             speed=speed,
+            **kwargs,
+        )
+
+    async def ai_generate_video(
+        self,
+        prompt: str,
+        model: Optional[str] = None,
+        image_url: Optional[str] = None,
+        duration: Optional[float] = None,
+        **kwargs,
+    ) -> "MultimodalResponse":
+        """
+        Generate video from text or image.
+
+        This method generates videos using Fal.ai's video generation models.
+        Supports both text-to-video and image-to-video generation.
+
+        Supported Providers:
+        - Fal.ai: Models like "fal-ai/minimax-video/image-to-video",
+          "fal-ai/kling-video/v1/standard", "fal-ai/luma-dream-machine"
+
+        Args:
+            prompt: Text description for the video
+            model: Video model to use (defaults to AIConfig.video_model)
+            image_url: Optional input image URL for image-to-video models
+            duration: Video duration in seconds (model-dependent)
+            **kwargs: Provider-specific parameters
+
+        Returns:
+            MultimodalResponse: Response with .files containing the video.
+                - Use response.files[0].save("video.mp4") to save
+                - Use response.files[0].url to get the video URL
+
+        Examples:
+            # Image to video
+            result = await app.ai_generate_video(
+                "Camera slowly pans across the landscape",
+                model="fal-ai/minimax-video/image-to-video",
+                image_url="https://example.com/image.jpg"
+            )
+            result.files[0].save("output.mp4")
+
+            # Text to video
+            result = await app.ai_generate_video(
+                "A cat playing with yarn",
+                model="fal-ai/kling-video/v1/standard"
+            )
+
+            # Luma Dream Machine
+            result = await app.ai_generate_video(
+                "A dreamy underwater scene",
+                model="fal-ai/luma-dream-machine"
+            )
+        """
+        if model is None:
+            model = self.agent.ai_config.video_model
+
+        # Currently only Fal supports video generation
+        if not (model.startswith("fal-ai/") or model.startswith("fal/")):
+            raise ValueError(
+                f"Video generation currently only supports Fal.ai models. "
+                f"Use models like 'fal-ai/minimax-video/image-to-video'. Got: {model}"
+            )
+
+        return await self._fal_provider.generate_video(
+            prompt=prompt,
+            model=model,
+            image_url=image_url,
+            duration=duration,
+            **kwargs,
+        )
+
+    async def ai_transcribe_audio(
+        self,
+        audio_url: str,
+        model: str = "fal-ai/whisper",
+        language: Optional[str] = None,
+        **kwargs,
+    ) -> "MultimodalResponse":
+        """
+        Transcribe audio to text (Speech-to-Text).
+
+        This method transcribes audio files to text using Fal.ai's Whisper models.
+
+        Supported Providers:
+        - Fal.ai: Models like "fal-ai/whisper", "fal-ai/wizper" (2x faster)
+
+        Args:
+            audio_url: URL to audio file to transcribe
+            model: STT model to use (defaults to "fal-ai/whisper")
+            language: Optional language hint (e.g., "en", "es", "fr")
+            **kwargs: Provider-specific parameters
+
+        Returns:
+            MultimodalResponse: Response with .text containing the transcription.
+                - Use response.text to get the transcribed text
+
+        Examples:
+            # Basic transcription
+            result = await app.ai_transcribe_audio(
+                "https://example.com/audio.mp3"
+            )
+            print(result.text)
+
+            # With language hint
+            result = await app.ai_transcribe_audio(
+                "https://example.com/spanish_audio.mp3",
+                model="fal-ai/whisper",
+                language="es"
+            )
+
+            # Fast transcription with Wizper
+            result = await app.ai_transcribe_audio(
+                "https://example.com/audio.mp3",
+                model="fal-ai/wizper"
+            )
+        """
+        # Currently only Fal supports transcription
+        if not (model.startswith("fal-ai/") or model.startswith("fal/")):
+            raise ValueError(
+                f"Audio transcription currently only supports Fal.ai models. "
+                f"Use 'fal-ai/whisper' or 'fal-ai/wizper'. Got: {model}"
+            )
+
+        return await self._fal_provider.transcribe_audio(
+            audio_url=audio_url,
+            model=model,
+            language=language,
             **kwargs,
         )

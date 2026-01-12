@@ -343,6 +343,16 @@ class AIConfig(BaseModel):
         default="wav", description="Default format for audio output (wav, mp3)."
     )
 
+    # Fal.ai settings
+    fal_api_key: Optional[str] = Field(
+        default=None,
+        description="Fal.ai API key. If not set, uses FAL_KEY environment variable.",
+    )
+    video_model: str = Field(
+        default="fal-ai/minimax-video/image-to-video",
+        description="Default model for video generation.",
+    )
+
     @computed_field
     @property
     def image_model(self) -> str:
