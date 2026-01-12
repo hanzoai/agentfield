@@ -14,6 +14,7 @@ This directory contains example agents demonstrating AgentField's capabilities a
 | **Deep Research** | [deep_research_agent](python_agent_nodes/deep_research_agent/) | - | - |
 | **Image Generation** | [image_generation_hello_world](python_agent_nodes/image_generation_hello_world/) | - | - |
 | **Multi-Agent Simulation** | [simulation_engine](python_agent_nodes/simulation_engine/) | [simulation](ts-node-examples/simulation/) | - |
+| **Notification Intelligence** | [notification_intelligence](python_agent_nodes/notification_intelligence/) | - | - |
 | **Serverless Deployment** | [serverless_hello](python_agent_nodes/serverless_hello/) | [serverless-hello](ts-node-examples/serverless-hello/) | - |
 | **Verifiable Credentials** | - | [verifiable-credentials](ts-node-examples/verifiable-credentials/) | - |
 
@@ -31,6 +32,7 @@ This directory contains example agents demonstrating AgentField's capabilities a
 | [documentation_chatbot](python_agent_nodes/documentation_chatbot/) | Enterprise RAG system | 3-reasoner architecture, Markdown-aware chunking, Inline citations |
 | [rag_evaluation](python_agent_nodes/rag_evaluation/) | Multi-metric QA assessment | Faithfulness, Relevance, Hallucination detection, Constitutional checks. [Docs →](https://agentfield.ai/examples/complete-agents/rag-evaluator) |
 | [simulation_engine](python_agent_nodes/simulation_engine/) | Domain-agnostic multi-agent simulation | 100+ parallel reasoners, Scenario analysis, Sentiment modeling |
+| [notification_intelligence](python_agent_nodes/notification_intelligence/) | Smart notification routing | 10+ specialist reasoners, Priority classification, Full-stack demo (Docker) |
 | [serverless_hello](python_agent_nodes/serverless_hello/) | Serverless deployment pattern | Lambda/Cloud Functions handler, Cross-agent calling |
 
 ### TypeScript Examples

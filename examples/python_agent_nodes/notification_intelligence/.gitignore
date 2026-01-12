@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# Node
+node_modules/
+.next/
+npm-debug.log
+yarn-error.log
+
+# Environment (keep .env.example, ignore actual .env)
+.env
+.env.local
+.env.*.local
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
+tsconfig.tsbuildinfo
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
