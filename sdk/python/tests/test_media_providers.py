@@ -432,7 +432,7 @@ class TestAIGenerateVideo:
         mock_provider.generate_video = mock_generate
         ai._fal_provider_instance = mock_provider
 
-        result = await ai.ai_generate_video(prompt="A cat playing")
+        await ai.ai_generate_video(prompt="A cat playing")
 
         # Should use default video_model
         mock_generate.assert_called_once()
