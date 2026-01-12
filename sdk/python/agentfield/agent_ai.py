@@ -1155,3 +1155,143 @@ class AgentAI:
         final_kwargs = {**multimodal_params, **kwargs}
 
         return await self.ai(*args, model=model, **final_kwargs)
+
+    async def ai_generate_image(
+        self,
+        prompt: str,
+        model: Optional[str] = None,
+        size: str = "1024x1024",
+        quality: str = "standard",
+        style: Optional[str] = None,
+        response_format: str = "url",
+        **kwargs,
+    ) -> "MultimodalResponse":
+        """
+        Generate an image from a text prompt.
+
+        This is a dedicated method for image generation with a clearer name
+        than ai_with_vision. Returns a MultimodalResponse containing the
+        generated image(s).
+
+        Supported Providers:
+        - LiteLLM: DALL-E models like "dall-e-3", "dall-e-2"
+        - OpenRouter: Models like "openrouter/google/gemini-2.5-flash-image-preview"
+        - Future: Fal.ai models like "fal/flux-pro"
+
+        Args:
+            prompt: Text description of the image to generate
+            model: Model to use (defaults to AIConfig.vision_model, typically "dall-e-3")
+            size: Image dimensions (e.g., "1024x1024", "1792x1024", "1024x1792")
+            quality: Image quality ("standard" or "hd")
+            style: Image style for DALL-E 3 ("vivid" or "natural")
+            response_format: Output format ("url" or "b64_json")
+            **kwargs: Provider-specific parameters (e.g., image_config for OpenRouter)
+
+        Returns:
+            MultimodalResponse: Response object with .images list containing ImageOutput objects.
+                - Use response.has_images to check if generation succeeded
+                - Use response.images[0].save("path.png") to save the image
+                - Use response.images[0].get_bytes() to get raw image bytes
+
+        Examples:
+            # Basic image generation
+            result = await app.ai_generate_image("A sunset over mountains")
+            if result.has_images:
+                result.images[0].save("sunset.png")
+
+            # OpenRouter with Gemini
+            result = await app.ai_generate_image(
+                "A futuristic cityscape at night",
+                model="openrouter/google/gemini-2.5-flash-image-preview",
+                image_config={"aspect_ratio": "16:9"}
+            )
+
+            # High quality DALL-E 3
+            result = await app.ai_generate_image(
+                "A photorealistic portrait",
+                model="dall-e-3",
+                quality="hd",
+                style="natural"
+            )
+        """
+        # Use configured vision/image model as default
+        if model is None:
+            model = self.agent.ai_config.vision_model
+
+        return await self.ai_with_vision(
+            prompt=prompt,
+            model=model,
+            size=size,
+            quality=quality,
+            style=style,
+            response_format=response_format,
+            **kwargs,
+        )
+
+    async def ai_generate_audio(
+        self,
+        text: str,
+        model: Optional[str] = None,
+        voice: str = "alloy",
+        format: str = "wav",
+        speed: float = 1.0,
+        **kwargs,
+    ) -> "MultimodalResponse":
+        """
+        Generate audio/speech from text (Text-to-Speech).
+
+        This is a dedicated method for audio generation with a clearer name
+        than ai_with_audio. Returns a MultimodalResponse containing the
+        generated audio.
+
+        Supported Providers:
+        - OpenAI TTS: Models like "tts-1", "tts-1-hd", "gpt-4o-mini-tts"
+        - Future: ElevenLabs, Fal.ai audio models
+
+        Args:
+            text: Text to convert to speech
+            model: TTS model to use (defaults to AIConfig.audio_model, typically "tts-1")
+            voice: Voice to use ("alloy", "echo", "fable", "onyx", "nova", "shimmer")
+            format: Audio format ("wav", "mp3", "opus", "aac", "flac", "pcm")
+            speed: Speech speed multiplier (0.25 to 4.0)
+            **kwargs: Provider-specific parameters
+
+        Returns:
+            MultimodalResponse: Response object with .audio containing AudioOutput.
+                - Use response.has_audio to check if generation succeeded
+                - Use response.audio.save("path.wav") to save the audio
+                - Use response.audio.get_bytes() to get raw audio bytes
+                - Use response.audio.play() to play the audio (requires pygame)
+
+        Examples:
+            # Basic speech generation
+            result = await app.ai_generate_audio("Hello, how are you today?")
+            if result.has_audio:
+                result.audio.save("greeting.wav")
+
+            # High-quality TTS with custom voice
+            result = await app.ai_generate_audio(
+                "Welcome to the presentation.",
+                model="tts-1-hd",
+                voice="nova",
+                format="mp3"
+            )
+
+            # Adjust speech speed
+            result = await app.ai_generate_audio(
+                "This is spoken slowly.",
+                speed=0.75
+            )
+        """
+        # Use configured audio model as default
+        if model is None:
+            model = self.agent.ai_config.audio_model
+
+        return await self.ai_with_audio(
+            text,
+            model=model,
+            voice=voice,
+            format=format,
+            speed=speed,
+            **kwargs,
+        )
