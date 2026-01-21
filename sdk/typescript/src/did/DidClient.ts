@@ -4,18 +4,19 @@ import https from 'node:https';
 import axios, { type AxiosInstance } from 'axios';
 
 // Shared HTTP agents with connection pooling to prevent socket exhaustion
+// maxTotalSockets limits total connections across all hosts (IPv4 + IPv6)
 const httpAgent = new http.Agent({
   keepAlive: true,
   maxSockets: 10,
-  maxFreeSockets: 5,
-  timeout: 30000
+  maxTotalSockets: 50,
+  maxFreeSockets: 5
 });
 
 const httpsAgent = new https.Agent({
   keepAlive: true,
   maxSockets: 10,
-  maxFreeSockets: 5,
-  timeout: 30000
+  maxTotalSockets: 50,
+  maxFreeSockets: 5
 });
 
 // ============================================================================

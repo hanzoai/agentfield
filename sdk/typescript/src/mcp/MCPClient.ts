@@ -5,18 +5,19 @@ import type { MCPServerConfig } from '../types/agent.js';
 import type { MCPTool } from '../types/mcp.js';
 
 // Shared HTTP agents with connection pooling to prevent socket exhaustion
+// maxTotalSockets limits total connections across all hosts (IPv4 + IPv6)
 const httpAgent = new http.Agent({
   keepAlive: true,
   maxSockets: 10,
-  maxFreeSockets: 5,
-  timeout: 30000
+  maxTotalSockets: 50,
+  maxFreeSockets: 5
 });
 
 const httpsAgent = new https.Agent({
   keepAlive: true,
   maxSockets: 10,
-  maxFreeSockets: 5,
-  timeout: 30000
+  maxTotalSockets: 50,
+  maxFreeSockets: 5
 });
 
 export class MCPClient {
