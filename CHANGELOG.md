@@ -6,6 +6,89 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.38-rc.2] - 2026-01-30
+
+
+### Fixed
+
+- Fix(sdk/python): prevent memory event websocket from blocking agent startup (#165)
+
+* fix(sdk/python): support websockets v14+ in memory event client
+
+websockets v14+ renamed the `additional_headers` parameter to
+`extra_headers`. Since the SDK does not pin a websockets version,
+users installing fresh get v14+ and hit:
+
+  create_connection() got an unexpected keyword argument 'additional_headers'
+
+This causes the memory event websocket connection to fail during
+agent startup, and the blocking reconnect retry loop (exponential
+backoff up to 31s) prevents uvicorn from completing initialization.
+
+- Detect websockets major version at import time and use the correct
+  parameter name (extra_headers for v14+, additional_headers for older)
+- Update unit test mock to accept either parameter name
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+* fix(sdk/python): prevent memory event connection from blocking agent startup
+
+When the control plane websocket is unreachable, the memory event client's
+connect() method would block indefinitely during FastAPI startup due to
+exponential backoff retries (up to 31s). This prevented uvicorn from ever
+binding to its port.
+
+- Add 5s timeout to initial websocket connection attempt
+- Background the reconnect retry loop so startup completes immediately
+- Remove incorrect websockets version detection (additional_headers is
+  correct for all modern versions v13+)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+
+* test(sdk/python): add tests for websockets version compat and non-blocking reconnect
+
+- Test that v14+ uses additional_headers parameter
+- Test that pre-v14 uses extra_headers parameter
+- Test that failed connection backgrounds the retry loop instead of blocking
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+
+* test(sdk/python): use CI matrix for websockets version compat testing
+
+Replace monkeypatched version tests with real version detection tests
+that validate against the actually installed websockets library. Add a
+websockets-compat CI job that runs memory events tests against both
+websockets 12.0 (extra_headers) and 15.0.1 (additional_headers) in
+parallel.
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+
+* fix(sdk/python): remove unused variable in test
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude <noreply@anthropic.com> (4a63bec)
+
+- Fix(ci): enable performance comments on fork PRs (#163)
+
+Split the Performance Check workflow into two parts to work around
+GitHub's security restriction that prevents fork PRs from posting
+comments.
+
+Changes:
+- memory-metrics.yml: Save benchmark results as artifact instead of
+  posting comments directly
+- memory-metrics-report.yml: New workflow triggered by workflow_run
+  that downloads results and posts the comment with base repo
+  permissions
+
+This fixes the "Resource not accessible by integration" 403 error
+that occurred when external contributors opened PRs.
+
+Co-authored-by: Claude <noreply@anthropic.com> (a130f94)
+
 ## [0.1.38-rc.1] - 2026-01-25
 
 
