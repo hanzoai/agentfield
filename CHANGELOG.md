@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.39-rc.1] - 2026-01-30
+
+
+### Fixed
+
+- Fix(sdk/python): use actual version and metadata in agent registration (#166)
+
+The registration payload hardcoded version to "1.0.0" and did not include
+agent metadata (description, tags, author). This passes the agent's actual
+version and metadata through to the control plane registration endpoint.
+
+Also fixes hardcoded sdk_version in deployment tags to use the real package
+version from agentfield.__version__.
+
+Fixes #148
+
+Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com> (35d2685)
+
 ## [0.1.38] - 2026-01-30
 
 ## [0.1.38-rc.2] - 2026-01-30
