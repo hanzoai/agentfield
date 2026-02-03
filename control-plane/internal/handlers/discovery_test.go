@@ -34,7 +34,7 @@ func TestDiscoveryCapabilities_Defaults(t *testing.T) {
 
 	lister := &stubAgentLister{agents: buildDiscoveryAgents()}
 	router := gin.New()
-	router.GET("/api/v1/discovery/capabilities", DiscoveryCapabilitiesHandler(lister))
+	router.GET("/api/v1/discovery/capabilities", DiscoveryCapabilitiesHandler(lister, nil))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/discovery/capabilities", nil)
 	rec := httptest.NewRecorder()
@@ -66,7 +66,7 @@ func TestDiscoveryCapabilities_WithFiltersAndSchemas(t *testing.T) {
 
 	lister := &stubAgentLister{agents: buildDiscoveryAgents()}
 	router := gin.New()
-	router.GET("/api/v1/discovery/capabilities", DiscoveryCapabilitiesHandler(lister))
+	router.GET("/api/v1/discovery/capabilities", DiscoveryCapabilitiesHandler(lister, nil))
 
 	url := "/api/v1/discovery/capabilities?node_id=agent-beta&reasoner=*research*&tags=ml*&include_input_schema=true&include_output_schema=true&include_examples=true&include_descriptions=false&health_status=active&limit=1&offset=0"
 	req := httptest.NewRequest(http.MethodGet, url, nil)
@@ -102,7 +102,7 @@ func TestDiscoveryCapabilities_Formats(t *testing.T) {
 
 	lister := &stubAgentLister{agents: buildDiscoveryAgents()}
 	router := gin.New()
-	router.GET("/api/v1/discovery/capabilities", DiscoveryCapabilitiesHandler(lister))
+	router.GET("/api/v1/discovery/capabilities", DiscoveryCapabilitiesHandler(lister, nil))
 
 	xmlReq := httptest.NewRequest(http.MethodGet, "/api/v1/discovery/capabilities?format=xml", nil)
 	xmlRec := httptest.NewRecorder()
@@ -129,7 +129,7 @@ func TestDiscoveryCapabilities_ValidationAndCaching(t *testing.T) {
 
 	lister := &stubAgentLister{agents: buildDiscoveryAgents()}
 	router := gin.New()
-	router.GET("/api/v1/discovery/capabilities", DiscoveryCapabilitiesHandler(lister))
+	router.GET("/api/v1/discovery/capabilities", DiscoveryCapabilitiesHandler(lister, nil))
 
 	badReq := httptest.NewRequest(http.MethodGet, "/api/v1/discovery/capabilities?format=yaml", nil)
 	badRec := httptest.NewRecorder()

@@ -72,6 +72,7 @@ type AgentFieldServer struct {
 	adminGRPCPort            int
 	webhookDispatcher        services.WebhookDispatcher
 	observabilityForwarder   services.ObservabilityForwarder
+	accessControlService     *services.AccessControlService
 }
 
 // NewAgentFieldServer creates a new instance of the AgentFieldServer.
@@ -270,6 +271,26 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		}
 	}
 
+	// Initialize access control service (only if auth is configured)
+	var accessControlService *services.AccessControlService
+	if cfg.API.Auth.APIKey != "" || len(cfg.API.Auth.Keys) > 0 {
+		// Convert config scope groups to types
+		scopeGroups := make(map[string]types.ScopeGroup)
+		for name, group := range cfg.API.Auth.ScopeGroups {
+			scopeGroups[name] = types.ScopeGroup{
+				Name:        name,
+				Tags:        group.Tags,
+				Description: group.Description,
+			}
+		}
+		// Note: audit storage not yet implemented, passing nil disables audit logging
+		accessControlService = services.NewAccessControlService(
+			cfg.API.Auth.AuditEnabled,
+			nil, // TODO: implement AccessAuditStorage in storage providers
+			scopeGroups,
+		)
+	}
+
 	return &AgentFieldServer{
 		storage:               storageProvider,
 		cache:                 cacheProvider,
@@ -293,6 +314,7 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		observabilityForwarder:   observabilityForwarder,
 		registryWatcherCancel:    nil,
 		adminGRPCPort:            adminPort,
+		accessControlService:     accessControlService,
 	}, nil
 }
 
@@ -951,7 +973,7 @@ func (s *AgentFieldServer) setupRoutes() {
 		// Discovery endpoints
 		discovery := agentAPI.Group("/discovery")
 		{
-			discovery.GET("/capabilities", handlers.DiscoveryCapabilitiesHandler(s.storage))
+			discovery.GET("/capabilities", handlers.DiscoveryCapabilitiesHandler(s.storage, s.accessControlService))
 		}
 
 		// Node management endpoints
@@ -987,8 +1009,8 @@ func (s *AgentFieldServer) setupRoutes() {
 		agentAPI.POST("/skills/:skill_id", handlers.ExecuteSkillHandler(s.storage))
 
 		// Unified execution endpoints (path-based)
-		agentAPI.POST("/execute/:target", handlers.ExecuteHandler(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout))
-		agentAPI.POST("/execute/async/:target", handlers.ExecuteAsyncHandler(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout))
+		agentAPI.POST("/execute/:target", handlers.ExecuteHandler(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout, s.accessControlService, []byte(s.config.API.Auth.PropagationSecret)))
+		agentAPI.POST("/execute/async/:target", handlers.ExecuteAsyncHandler(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout, s.accessControlService, []byte(s.config.API.Auth.PropagationSecret)))
 		agentAPI.GET("/executions/:execution_id", handlers.GetExecutionStatusHandler(s.storage))
 		agentAPI.POST("/executions/batch-status", handlers.BatchExecutionStatusHandler(s.storage))
 		agentAPI.POST("/executions/:execution_id/status", handlers.UpdateExecutionStatusHandler(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout))

@@ -18,6 +18,7 @@ import (
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/events"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
 	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/internal/utils"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
@@ -111,12 +112,14 @@ type executionStatusUpdateRequest struct {
 }
 
 type executionController struct {
-	store      ExecutionStore
-	httpClient *http.Client
-	payloads   services.PayloadStore
-	webhooks   services.WebhookDispatcher
-	eventBus   *events.ExecutionEventBus
-	timeout    time.Duration
+	store             ExecutionStore
+	httpClient        *http.Client
+	payloads          services.PayloadStore
+	webhooks          services.WebhookDispatcher
+	eventBus          *events.ExecutionEventBus
+	timeout           time.Duration
+	accessControl     *services.AccessControlService
+	propagationSecret []byte
 }
 
 type asyncExecutionJob struct {
@@ -152,36 +155,36 @@ const (
 )
 
 // ExecuteHandler handles synchronous execution requests.
-func ExecuteHandler(store ExecutionStore, payloads services.PayloadStore, webhooks services.WebhookDispatcher, timeout time.Duration) gin.HandlerFunc {
-	controller := newExecutionController(store, payloads, webhooks, timeout)
+func ExecuteHandler(store ExecutionStore, payloads services.PayloadStore, webhooks services.WebhookDispatcher, timeout time.Duration, accessControl *services.AccessControlService, propagationSecret []byte) gin.HandlerFunc {
+	controller := newExecutionController(store, payloads, webhooks, timeout, accessControl, propagationSecret)
 	return controller.handleSync
 }
 
 // ExecuteAsyncHandler handles asynchronous execution requests.
-func ExecuteAsyncHandler(store ExecutionStore, payloads services.PayloadStore, webhooks services.WebhookDispatcher, timeout time.Duration) gin.HandlerFunc {
-	controller := newExecutionController(store, payloads, webhooks, timeout)
+func ExecuteAsyncHandler(store ExecutionStore, payloads services.PayloadStore, webhooks services.WebhookDispatcher, timeout time.Duration, accessControl *services.AccessControlService, propagationSecret []byte) gin.HandlerFunc {
+	controller := newExecutionController(store, payloads, webhooks, timeout, accessControl, propagationSecret)
 	return controller.handleAsync
 }
 
 // GetExecutionStatusHandler resolves a single execution record.
 func GetExecutionStatusHandler(store ExecutionStore) gin.HandlerFunc {
-	controller := newExecutionController(store, nil, nil, 0)
+	controller := newExecutionController(store, nil, nil, 0, nil, nil)
 	return controller.handleStatus
 }
 
 // BatchExecutionStatusHandler resolves multiple execution records.
 func BatchExecutionStatusHandler(store ExecutionStore) gin.HandlerFunc {
-	controller := newExecutionController(store, nil, nil, 0)
+	controller := newExecutionController(store, nil, nil, 0, nil, nil)
 	return controller.handleBatchStatus
 }
 
 // UpdateExecutionStatusHandler ingests status callbacks from agent nodes.
 func UpdateExecutionStatusHandler(store ExecutionStore, payloads services.PayloadStore, webhooks services.WebhookDispatcher, timeout time.Duration) gin.HandlerFunc {
-	controller := newExecutionController(store, payloads, webhooks, timeout)
+	controller := newExecutionController(store, payloads, webhooks, timeout, nil, nil)
 	return controller.handleStatusUpdate
 }
 
-func newExecutionController(store ExecutionStore, payloads services.PayloadStore, webhooks services.WebhookDispatcher, timeout time.Duration) *executionController {
+func newExecutionController(store ExecutionStore, payloads services.PayloadStore, webhooks services.WebhookDispatcher, timeout time.Duration, accessControl *services.AccessControlService, propagationSecret []byte) *executionController {
 	// Use default timeout if not provided (0 or negative)
 	if timeout <= 0 {
 		timeout = 90 * time.Second
@@ -191,10 +194,12 @@ func newExecutionController(store ExecutionStore, payloads services.PayloadStore
 		httpClient: &http.Client{
 			Timeout: timeout,
 		},
-		payloads: payloads,
-		webhooks: webhooks,
-		eventBus: store.GetExecutionEventBus(),
-		timeout:  timeout,
+		payloads:          payloads,
+		webhooks:          webhooks,
+		eventBus:          store.GetExecutionEventBus(),
+		timeout:           timeout,
+		accessControl:     accessControl,
+		propagationSecret: propagationSecret,
 	}
 }
 
@@ -768,6 +773,10 @@ type preparedExecution struct {
 	targetType        string
 	webhookRegistered bool
 	webhookError      *string
+	// Key context for propagation to agents
+	keyID     string
+	keyName   string
+	keyScopes []string
 }
 
 func (c *executionController) prepareExecution(ctx context.Context, ginCtx *gin.Context) (*preparedExecution, error) {
@@ -807,6 +816,21 @@ func (c *executionController) prepareExecution(ctx context.Context, ginCtx *gin.
 	if agent == nil {
 		return nil, fmt.Errorf("agent '%s' not found", target.NodeID)
 	}
+
+	// Extract key context for permission check and propagation
+	keyID := middleware.GetKeyID(ginCtx)
+	keyName := middleware.GetKeyName(ginCtx)
+	keyScopes := middleware.GetKeyScopes(ginCtx)
+
+	// Access control check
+	if c.accessControl != nil {
+		agentTags := services.GetAgentTags(agent)
+		decision := c.accessControl.CheckAccess(ctx, keyID, keyName, keyScopes, target.NodeID, target.TargetName, agentTags)
+		if !decision.Allowed {
+			return nil, fmt.Errorf("access denied: API key '%s' cannot access agent '%s' (reason: %s)", keyName, target.NodeID, decision.DenyReason)
+		}
+	}
+
 	if agent.DeploymentType == "" && agent.Metadata.Custom != nil {
 		if v, ok := agent.Metadata.Custom["serverless"]; ok && fmt.Sprint(v) == "true" {
 			agent.DeploymentType = "serverless"
@@ -926,6 +950,9 @@ func (c *executionController) prepareExecution(ctx context.Context, ginCtx *gin.
 		targetType:        targetType,
 		webhookRegistered: webhookRegistered,
 		webhookError:      webhookError,
+		keyID:             keyID,
+		keyName:           keyName,
+		keyScopes:         keyScopes,
 	}, nil
 }
 
@@ -949,6 +976,11 @@ func (c *executionController) callAgent(ctx context.Context, plan *preparedExecu
 	}
 	if plan.exec.ActorID != nil {
 		req.Header.Set("X-Actor-ID", *plan.exec.ActorID)
+	}
+
+	// Propagate key context for inter-agent calls
+	if len(c.propagationSecret) > 0 && plan.keyID != "" {
+		middleware.PropagateKeyContextFromValues(req, plan.keyID, plan.keyName, plan.keyScopes, c.propagationSecret)
 	}
 
 	resp, err := c.httpClient.Do(req)

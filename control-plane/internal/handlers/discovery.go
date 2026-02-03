@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
+	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
@@ -184,7 +186,7 @@ func getCachedAgents(ctx context.Context, storageProvider AgentLister) ([]*types
 }
 
 // DiscoveryCapabilitiesHandler exposes the discovery endpoint.
-func DiscoveryCapabilitiesHandler(storageProvider AgentLister) gin.HandlerFunc {
+func DiscoveryCapabilitiesHandler(storageProvider AgentLister, accessControl *services.AccessControlService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		requestFormat := normalizeDiscoveryFormat(strings.ToLower(strings.TrimSpace(c.DefaultQuery("format", "json"))))
@@ -231,6 +233,12 @@ func DiscoveryCapabilitiesHandler(storageProvider AgentLister) gin.HandlerFunc {
 				"message": "Failed to retrieve agent capabilities",
 			})
 			return
+		}
+
+		// Permission filter - only show agents the key can access
+		if accessControl != nil {
+			keyScopes := middleware.GetKeyScopes(c)
+			agents = accessControl.FilterAgentsByAccess(agents, keyScopes)
 		}
 
 		response := buildDiscoveryResponse(agents, filters)
