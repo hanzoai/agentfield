@@ -666,9 +666,12 @@ func (s *AgentFieldServer) setupRoutes() {
 	}
 
 	// Try to get API key storage from the storage provider
-	if keyStorage, ok := s.storage.(storage.APIKeyStorage); ok {
-		authConfig.KeyStorage = keyStorage
-		logger.Logger.Info().Msg("🔐 Multi-key API authentication enabled")
+	// Only enable multi-key auth if authentication is actually configured (MasterAPIKey or Keys)
+	if s.config.API.Auth.APIKey != "" || len(s.config.API.Auth.Keys) > 0 {
+		if keyStorage, ok := s.storage.(storage.APIKeyStorage); ok {
+			authConfig.KeyStorage = keyStorage
+			logger.Logger.Info().Msg("🔐 Multi-key API authentication enabled")
+		}
 	}
 
 	// Set up propagation secret for secure key context forwarding
