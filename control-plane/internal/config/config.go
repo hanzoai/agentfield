@@ -5,6 +5,7 @@ import (
 	"os"            // Added for os.Stat, os.ReadFile
 	"path/filepath" // Added for filepath.Join
 	"strconv"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3" // Added for yaml.Unmarshal
@@ -120,10 +121,39 @@ type CORSConfig struct {
 
 // AuthConfig holds API authentication configuration.
 type AuthConfig struct {
-	// APIKey is checked against headers or query params. Empty disables auth.
+	// APIKey is the legacy single shared API key (backwards compatible).
+	// If set and Keys is empty, this becomes a super key named "default".
 	APIKey string `yaml:"api_key" mapstructure:"api_key"`
+
 	// SkipPaths allows bypassing auth for specific endpoints (e.g., health).
 	SkipPaths []string `yaml:"skip_paths" mapstructure:"skip_paths"`
+
+	// ScopeGroups defines named groups of tags for workflow-level access.
+	ScopeGroups map[string]ScopeGroupConfig `yaml:"scope_groups" mapstructure:"scope_groups"`
+
+	// Keys defines multiple API keys with scoped access.
+	Keys []APIKeyConfig `yaml:"keys" mapstructure:"keys"`
+
+	// AuditEnabled enables logging of all access decisions.
+	AuditEnabled bool `yaml:"audit_enabled" mapstructure:"audit_enabled"`
+
+	// PropagationSecret is used to sign key context headers for secure propagation.
+	// If empty, a random secret is generated at startup.
+	PropagationSecret string `yaml:"propagation_secret" mapstructure:"propagation_secret"`
+}
+
+// ScopeGroupConfig defines a scope group in configuration.
+type ScopeGroupConfig struct {
+	Tags        []string `yaml:"tags" mapstructure:"tags"`
+	Description string   `yaml:"description,omitempty" mapstructure:"description"`
+}
+
+// APIKeyConfig defines an API key in configuration.
+type APIKeyConfig struct {
+	Name        string   `yaml:"name" mapstructure:"name"`
+	Scopes      []string `yaml:"scopes" mapstructure:"scopes"` // Can include "@group-name"
+	Description string   `yaml:"description,omitempty" mapstructure:"description"`
+	ExpiresAt   string   `yaml:"expires_at,omitempty" mapstructure:"expires_at"` // RFC3339 format
 }
 
 // StorageConfig is an alias of the storage layer's configuration so callers can
@@ -183,6 +213,16 @@ func applyEnvOverrides(cfg *Config) {
 		cfg.API.Auth.APIKey = apiKey
 	}
 
+	// Key propagation secret
+	if secret := os.Getenv("AGENTFIELD_KEY_PROPAGATION_SECRET"); secret != "" {
+		cfg.API.Auth.PropagationSecret = secret
+	}
+
+	// Audit logging
+	if val := os.Getenv("AGENTFIELD_AUDIT_ENABLED"); val != "" {
+		cfg.API.Auth.AuditEnabled = val == "true" || val == "1"
+	}
+
 	// Node health monitoring overrides
 	if val := os.Getenv("AGENTFIELD_HEALTH_CHECK_INTERVAL"); val != "" {
 		if d, err := time.ParseDuration(val); err == nil {
@@ -209,4 +249,11 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.AgentField.NodeHealth.HeartbeatStaleThreshold = d
 		}
 	}
+}
+
+// ResolveAPIKeyValue resolves an API key value from environment variable.
+// Format: AGENTFIELD_API_KEY_<NAME> where NAME is uppercase with - replaced by _
+func ResolveAPIKeyValue(keyName string) string {
+	envKey := "AGENTFIELD_API_KEY_" + strings.ToUpper(strings.ReplaceAll(keyName, "-", "_"))
+	return os.Getenv(envKey)
 }

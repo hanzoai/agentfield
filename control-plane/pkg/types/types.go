@@ -165,6 +165,9 @@ type AgentNode struct {
 	DeploymentType string  `json:"deployment_type" db:"deployment_type"`         // "long_running" or "serverless"
 	InvocationURL  *string `json:"invocation_url,omitempty" db:"invocation_url"` // For serverless agents
 
+	// Access control tags - agent-level tags that apply to all reasoners/skills
+	Tags []string `json:"tags,omitempty" db:"tags"`
+
 	CallbackDiscovery *CallbackDiscoveryInfo `json:"callback_discovery,omitempty" db:"-"`
 
 	Reasoners           []ReasonerDefinition `json:"reasoners" db:"reasoners"`

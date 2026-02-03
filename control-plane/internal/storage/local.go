@@ -1604,6 +1604,45 @@ func (ls *LocalStorage) runMigrations() error {
 			description: "Add document size column to workflow_vcs",
 			sql:         `ALTER TABLE workflow_vcs ADD COLUMN document_size_bytes INTEGER DEFAULT 0;`,
 		},
+		{
+			version:     "018",
+			description: "Create API keys table for scoped access control",
+			sql: `
+				CREATE TABLE IF NOT EXISTS api_keys (
+					id              TEXT PRIMARY KEY,
+					name            TEXT NOT NULL UNIQUE,
+					key_hash        TEXT NOT NULL,
+					scopes          TEXT NOT NULL DEFAULT '[]',
+					description     TEXT,
+					enabled         INTEGER NOT NULL DEFAULT 1,
+					created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					expires_at      TEXT,
+					last_used_at    TEXT
+				);
+				CREATE INDEX IF NOT EXISTS idx_api_keys_name ON api_keys(name);
+				CREATE INDEX IF NOT EXISTS idx_api_keys_enabled ON api_keys(enabled);`,
+		},
+		{
+			version:     "019",
+			description: "Create access audit log table",
+			sql: `
+				CREATE TABLE IF NOT EXISTS access_audit_log (
+					id              INTEGER PRIMARY KEY AUTOINCREMENT,
+					timestamp       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					api_key_id      TEXT NOT NULL,
+					api_key_name    TEXT NOT NULL,
+					target_agent    TEXT NOT NULL,
+					target_reasoner TEXT,
+					agent_tags      TEXT NOT NULL DEFAULT '[]',
+					key_scopes      TEXT NOT NULL DEFAULT '[]',
+					allowed         INTEGER NOT NULL,
+					deny_reason     TEXT
+				);
+				CREATE INDEX IF NOT EXISTS idx_access_audit_timestamp ON access_audit_log(timestamp);
+				CREATE INDEX IF NOT EXISTS idx_access_audit_key_id ON access_audit_log(api_key_id);
+				CREATE INDEX IF NOT EXISTS idx_access_audit_allowed ON access_audit_log(allowed);
+				CREATE INDEX IF NOT EXISTS idx_access_audit_target ON access_audit_log(target_agent);`,
+		},
 	}
 
 	// Apply each migration if not already applied
@@ -7141,4 +7180,586 @@ func (ls *LocalStorage) ListExecutionWebhookEventsBatch(ctx context.Context, exe
 	}
 
 	return results, nil
+}
+
+// =============================================================================
+// API Key Storage Implementation
+// =============================================================================
+
+// CreateKey creates a new API key and returns the plain key value (only returned once).
+func (ls *LocalStorage) CreateKey(ctx context.Context, req types.APIKeyCreateRequest) (*types.APIKey, string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, "", fmt.Errorf("context cancelled during create key: %w", err)
+	}
+
+	// Generate key ID and plain key value
+	keyID := GenerateKeyID()
+	plainKey, err := GenerateAPIKey("sk")
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to generate API key: %w", err)
+	}
+
+	// Hash the key
+	keyHash, err := HashAPIKey(plainKey)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to hash API key: %w", err)
+	}
+
+	// Serialize scopes as JSON
+	scopes := req.Scopes
+	if scopes == nil {
+		scopes = []string{}
+	}
+	scopesJSON, err := json.Marshal(scopes)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to marshal scopes: %w", err)
+	}
+
+	now := time.Now()
+	key := &types.APIKey{
+		ID:          keyID,
+		Name:        req.Name,
+		KeyHash:     keyHash,
+		Scopes:      scopes,
+		Description: req.Description,
+		Enabled:     true,
+		CreatedAt:   now,
+		ExpiresAt:   req.ExpiresAt,
+	}
+
+	var query string
+	var args []interface{}
+
+	if ls.mode == "postgres" {
+		query = `
+			INSERT INTO api_keys (id, name, key_hash, scopes, description, enabled, created_at, expires_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
+		args = []interface{}{key.ID, key.Name, key.KeyHash, scopesJSON, key.Description, key.Enabled, key.CreatedAt, key.ExpiresAt}
+	} else {
+		query = `
+			INSERT INTO api_keys (id, name, key_hash, scopes, description, enabled, created_at, expires_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+		args = []interface{}{key.ID, key.Name, key.KeyHash, string(scopesJSON), boolToInt(key.Enabled), key.CreatedAt.Format(time.RFC3339), formatNullableTime(key.ExpiresAt)}
+	}
+
+	_, err = ls.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to insert API key: %w", err)
+	}
+
+	return key, plainKey, nil
+}
+
+// GetKeyByID retrieves a key by its ID.
+func (ls *LocalStorage) GetKeyByID(ctx context.Context, id string) (*types.APIKey, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context cancelled during get key by ID: %w", err)
+	}
+
+	query := `
+		SELECT id, name, key_hash, scopes, description, enabled, created_at, expires_at, last_used_at
+		FROM api_keys WHERE id = ?`
+	if ls.mode == "postgres" {
+		query = strings.Replace(query, "?", "$1", 1)
+	}
+
+	return ls.scanAPIKey(ls.db.QueryRowContext(ctx, query, id))
+}
+
+// GetKeyByName retrieves a key by its name.
+func (ls *LocalStorage) GetKeyByName(ctx context.Context, name string) (*types.APIKey, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context cancelled during get key by name: %w", err)
+	}
+
+	query := `
+		SELECT id, name, key_hash, scopes, description, enabled, created_at, expires_at, last_used_at
+		FROM api_keys WHERE name = ?`
+	if ls.mode == "postgres" {
+		query = strings.Replace(query, "?", "$1", 1)
+	}
+
+	return ls.scanAPIKey(ls.db.QueryRowContext(ctx, query, name))
+}
+
+// VerifyKey verifies a plain key and returns the APIKey if valid.
+// This scans all keys and checks the hash - for better performance, consider caching.
+func (ls *LocalStorage) VerifyKey(ctx context.Context, plainKey string) (*types.APIKey, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context cancelled during verify key: %w", err)
+	}
+
+	// Get all enabled keys and verify against each (bcrypt requires this approach)
+	query := `
+		SELECT id, name, key_hash, scopes, description, enabled, created_at, expires_at, last_used_at
+		FROM api_keys WHERE enabled = ?`
+	enabledVal := interface{}(true)
+	if ls.mode != "postgres" {
+		enabledVal = 1
+		query = strings.Replace(query, "?", "?", 1)
+	} else {
+		query = strings.Replace(query, "?", "$1", 1)
+	}
+
+	rows, err := ls.db.QueryContext(ctx, query, enabledVal)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query API keys: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		key, err := ls.scanAPIKeyFromRows(rows)
+		if err != nil {
+			continue // Skip invalid rows
+		}
+
+		// Verify the key hash
+		if VerifyAPIKeyHash(plainKey, key.KeyHash) {
+			return key, nil
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating API keys: %w", err)
+	}
+
+	return nil, fmt.Errorf("invalid API key")
+}
+
+// ListKeys returns all API keys (without sensitive data).
+func (ls *LocalStorage) ListKeys(ctx context.Context) ([]*types.APIKey, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context cancelled during list keys: %w", err)
+	}
+
+	query := `
+		SELECT id, name, key_hash, scopes, description, enabled, created_at, expires_at, last_used_at
+		FROM api_keys ORDER BY created_at DESC`
+
+	rows, err := ls.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query API keys: %w", err)
+	}
+	defer rows.Close()
+
+	var keys []*types.APIKey
+	for rows.Next() {
+		key, err := ls.scanAPIKeyFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating API keys: %w", err)
+	}
+
+	return keys, nil
+}
+
+// UpdateKeyLastUsed updates the last_used_at timestamp.
+func (ls *LocalStorage) UpdateKeyLastUsed(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during update key last used: %w", err)
+	}
+
+	now := time.Now()
+	var query string
+	var args []interface{}
+
+	if ls.mode == "postgres" {
+		query = `UPDATE api_keys SET last_used_at = $1 WHERE id = $2`
+		args = []interface{}{now, id}
+	} else {
+		query = `UPDATE api_keys SET last_used_at = ? WHERE id = ?`
+		args = []interface{}{now.Format(time.RFC3339), id}
+	}
+
+	_, err := ls.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("failed to update API key last used: %w", err)
+	}
+
+	return nil
+}
+
+// DeleteKey removes an API key.
+func (ls *LocalStorage) DeleteKey(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during delete key: %w", err)
+	}
+
+	query := `DELETE FROM api_keys WHERE id = ?`
+	if ls.mode == "postgres" {
+		query = strings.Replace(query, "?", "$1", 1)
+	}
+
+	result, err := ls.db.ExecContext(ctx, query, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete API key: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("API key not found: %s", id)
+	}
+
+	return nil
+}
+
+// DisableKey disables an API key.
+func (ls *LocalStorage) DisableKey(ctx context.Context, id string) error {
+	return ls.setKeyEnabled(ctx, id, false)
+}
+
+// EnableKey enables an API key.
+func (ls *LocalStorage) EnableKey(ctx context.Context, id string) error {
+	return ls.setKeyEnabled(ctx, id, true)
+}
+
+// setKeyEnabled sets the enabled status of an API key.
+func (ls *LocalStorage) setKeyEnabled(ctx context.Context, id string, enabled bool) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during set key enabled: %w", err)
+	}
+
+	var query string
+	var args []interface{}
+
+	if ls.mode == "postgres" {
+		query = `UPDATE api_keys SET enabled = $1 WHERE id = $2`
+		args = []interface{}{enabled, id}
+	} else {
+		query = `UPDATE api_keys SET enabled = ? WHERE id = ?`
+		args = []interface{}{boolToInt(enabled), id}
+	}
+
+	result, err := ls.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("failed to update API key enabled status: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("API key not found: %s", id)
+	}
+
+	return nil
+}
+
+// scanAPIKey scans a single API key from a sql.Row.
+func (ls *LocalStorage) scanAPIKey(row *sql.Row) (*types.APIKey, error) {
+	key := &types.APIKey{}
+	var scopesRaw string
+	var description sql.NullString
+	var expiresAt, lastUsedAt sql.NullString
+	var enabledRaw interface{}
+
+	if ls.mode == "postgres" {
+		var enabled bool
+		var expiresAtPG, lastUsedAtPG sql.NullTime
+		err := row.Scan(&key.ID, &key.Name, &key.KeyHash, &scopesRaw, &description, &enabled, &key.CreatedAt, &expiresAtPG, &lastUsedAtPG)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, fmt.Errorf("API key not found")
+			}
+			return nil, fmt.Errorf("failed to scan API key: %w", err)
+		}
+		key.Enabled = enabled
+		if expiresAtPG.Valid {
+			key.ExpiresAt = &expiresAtPG.Time
+		}
+		if lastUsedAtPG.Valid {
+			key.LastUsedAt = &lastUsedAtPG.Time
+		}
+	} else {
+		var createdAtStr string
+		err := row.Scan(&key.ID, &key.Name, &key.KeyHash, &scopesRaw, &description, &enabledRaw, &createdAtStr, &expiresAt, &lastUsedAt)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, fmt.Errorf("API key not found")
+			}
+			return nil, fmt.Errorf("failed to scan API key: %w", err)
+		}
+		key.Enabled = intToBool(enabledRaw)
+		key.CreatedAt, _ = time.Parse(time.RFC3339, createdAtStr)
+		if expiresAt.Valid && expiresAt.String != "" {
+			t, _ := time.Parse(time.RFC3339, expiresAt.String)
+			key.ExpiresAt = &t
+		}
+		if lastUsedAt.Valid && lastUsedAt.String != "" {
+			t, _ := time.Parse(time.RFC3339, lastUsedAt.String)
+			key.LastUsedAt = &t
+		}
+	}
+
+	if description.Valid {
+		key.Description = description.String
+	}
+
+	// Parse scopes JSON
+	if err := json.Unmarshal([]byte(scopesRaw), &key.Scopes); err != nil {
+		key.Scopes = []string{}
+	}
+
+	return key, nil
+}
+
+// scanAPIKeyFromRows scans a single API key from sql.Rows.
+func (ls *LocalStorage) scanAPIKeyFromRows(rows *sql.Rows) (*types.APIKey, error) {
+	key := &types.APIKey{}
+	var scopesRaw string
+	var description sql.NullString
+	var expiresAt, lastUsedAt sql.NullString
+	var enabledRaw interface{}
+
+	if ls.mode == "postgres" {
+		var enabled bool
+		var expiresAtPG, lastUsedAtPG sql.NullTime
+		err := rows.Scan(&key.ID, &key.Name, &key.KeyHash, &scopesRaw, &description, &enabled, &key.CreatedAt, &expiresAtPG, &lastUsedAtPG)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan API key: %w", err)
+		}
+		key.Enabled = enabled
+		if expiresAtPG.Valid {
+			key.ExpiresAt = &expiresAtPG.Time
+		}
+		if lastUsedAtPG.Valid {
+			key.LastUsedAt = &lastUsedAtPG.Time
+		}
+	} else {
+		var createdAtStr string
+		err := rows.Scan(&key.ID, &key.Name, &key.KeyHash, &scopesRaw, &description, &enabledRaw, &createdAtStr, &expiresAt, &lastUsedAt)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan API key: %w", err)
+		}
+		key.Enabled = intToBool(enabledRaw)
+		key.CreatedAt, _ = time.Parse(time.RFC3339, createdAtStr)
+		if expiresAt.Valid && expiresAt.String != "" {
+			t, _ := time.Parse(time.RFC3339, expiresAt.String)
+			key.ExpiresAt = &t
+		}
+		if lastUsedAt.Valid && lastUsedAt.String != "" {
+			t, _ := time.Parse(time.RFC3339, lastUsedAt.String)
+			key.LastUsedAt = &t
+		}
+	}
+
+	if description.Valid {
+		key.Description = description.String
+	}
+
+	// Parse scopes JSON
+	if err := json.Unmarshal([]byte(scopesRaw), &key.Scopes); err != nil {
+		key.Scopes = []string{}
+	}
+
+	return key, nil
+}
+
+// boolToInt converts a bool to int for SQLite.
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// intToBool converts an interface{} (int or int64) to bool for SQLite.
+func intToBool(v interface{}) bool {
+	switch val := v.(type) {
+	case int64:
+		return val == 1
+	case int:
+		return val == 1
+	case bool:
+		return val
+	default:
+		return false
+	}
+}
+
+// formatNullableTime formats a time pointer for SQLite (returns nil if nil).
+func formatNullableTime(t *time.Time) interface{} {
+	if t == nil {
+		return nil
+	}
+	return t.Format(time.RFC3339)
+}
+
+// =============================================================================
+// Access Audit Log Storage Implementation
+// =============================================================================
+
+// LogAccessDecision logs an access decision.
+func (ls *LocalStorage) LogAccessDecision(ctx context.Context, entry types.AccessAuditEntry) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during log access decision: %w", err)
+	}
+
+	agentTagsJSON, err := json.Marshal(entry.AgentTags)
+	if err != nil {
+		return fmt.Errorf("failed to marshal agent tags: %w", err)
+	}
+	keyScopesJSON, err := json.Marshal(entry.KeyScopes)
+	if err != nil {
+		return fmt.Errorf("failed to marshal key scopes: %w", err)
+	}
+
+	var query string
+	var args []interface{}
+
+	if ls.mode == "postgres" {
+		query = `
+			INSERT INTO access_audit_log (api_key_id, api_key_name, target_agent, target_reasoner, agent_tags, key_scopes, allowed, deny_reason)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
+		args = []interface{}{entry.APIKeyID, entry.APIKeyName, entry.TargetAgent, entry.TargetReasoner, agentTagsJSON, keyScopesJSON, entry.Allowed, entry.DenyReason}
+	} else {
+		query = `
+			INSERT INTO access_audit_log (api_key_id, api_key_name, target_agent, target_reasoner, agent_tags, key_scopes, allowed, deny_reason)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+		args = []interface{}{entry.APIKeyID, entry.APIKeyName, entry.TargetAgent, entry.TargetReasoner, string(agentTagsJSON), string(keyScopesJSON), boolToInt(entry.Allowed), entry.DenyReason}
+	}
+
+	_, err = ls.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("failed to insert access audit entry: %w", err)
+	}
+
+	return nil
+}
+
+// ListAccessAuditEntries returns audit entries with optional filters.
+func (ls *LocalStorage) ListAccessAuditEntries(ctx context.Context, filters AccessAuditFilters) ([]*types.AccessAuditEntry, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context cancelled during list access audit entries: %w", err)
+	}
+
+	var conditions []string
+	var args []interface{}
+	paramIdx := 1
+
+	if filters.APIKeyID != nil {
+		if ls.mode == "postgres" {
+			conditions = append(conditions, fmt.Sprintf("api_key_id = $%d", paramIdx))
+		} else {
+			conditions = append(conditions, "api_key_id = ?")
+		}
+		args = append(args, *filters.APIKeyID)
+		paramIdx++
+	}
+	if filters.TargetAgent != nil {
+		if ls.mode == "postgres" {
+			conditions = append(conditions, fmt.Sprintf("target_agent = $%d", paramIdx))
+		} else {
+			conditions = append(conditions, "target_agent = ?")
+		}
+		args = append(args, *filters.TargetAgent)
+		paramIdx++
+	}
+	if filters.Allowed != nil {
+		if ls.mode == "postgres" {
+			conditions = append(conditions, fmt.Sprintf("allowed = $%d", paramIdx))
+			args = append(args, *filters.Allowed)
+		} else {
+			conditions = append(conditions, "allowed = ?")
+			args = append(args, boolToInt(*filters.Allowed))
+		}
+		paramIdx++
+	}
+
+	query := `
+		SELECT id, timestamp, api_key_id, api_key_name, target_agent, target_reasoner, agent_tags, key_scopes, allowed, deny_reason
+		FROM access_audit_log`
+
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+	query += " ORDER BY timestamp DESC"
+
+	if filters.Limit > 0 {
+		if ls.mode == "postgres" {
+			query += fmt.Sprintf(" LIMIT $%d", paramIdx)
+		} else {
+			query += " LIMIT ?"
+		}
+		args = append(args, filters.Limit)
+		paramIdx++
+	}
+	if filters.Offset > 0 {
+		if ls.mode == "postgres" {
+			query += fmt.Sprintf(" OFFSET $%d", paramIdx)
+		} else {
+			query += " OFFSET ?"
+		}
+		args = append(args, filters.Offset)
+	}
+
+	rows, err := ls.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query access audit entries: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []*types.AccessAuditEntry
+	for rows.Next() {
+		entry, err := ls.scanAccessAuditEntry(rows)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating access audit entries: %w", err)
+	}
+
+	return entries, nil
+}
+
+// scanAccessAuditEntry scans a single access audit entry from sql.Rows.
+func (ls *LocalStorage) scanAccessAuditEntry(rows *sql.Rows) (*types.AccessAuditEntry, error) {
+	entry := &types.AccessAuditEntry{}
+	var agentTagsRaw, keyScopesRaw string
+	var targetReasoner, denyReason sql.NullString
+
+	if ls.mode == "postgres" {
+		err := rows.Scan(&entry.ID, &entry.Timestamp, &entry.APIKeyID, &entry.APIKeyName, &entry.TargetAgent, &targetReasoner, &agentTagsRaw, &keyScopesRaw, &entry.Allowed, &denyReason)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan access audit entry: %w", err)
+		}
+	} else {
+		var timestampStr string
+		var allowedRaw interface{}
+		err := rows.Scan(&entry.ID, &timestampStr, &entry.APIKeyID, &entry.APIKeyName, &entry.TargetAgent, &targetReasoner, &agentTagsRaw, &keyScopesRaw, &allowedRaw, &denyReason)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan access audit entry: %w", err)
+		}
+		entry.Timestamp, _ = time.Parse(time.RFC3339, timestampStr)
+		entry.Allowed = intToBool(allowedRaw)
+	}
+
+	if targetReasoner.Valid {
+		entry.TargetReasoner = targetReasoner.String
+	}
+	if denyReason.Valid {
+		entry.DenyReason = denyReason.String
+	}
+
+	// Parse JSON arrays
+	if err := json.Unmarshal([]byte(agentTagsRaw), &entry.AgentTags); err != nil {
+		entry.AgentTags = []string{}
+	}
+	if err := json.Unmarshal([]byte(keyScopesRaw), &entry.KeyScopes); err != nil {
+		entry.KeyScopes = []string{}
+	}
+
+	return entry, nil
 }

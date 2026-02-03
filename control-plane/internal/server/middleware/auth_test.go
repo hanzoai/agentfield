@@ -41,7 +41,7 @@ func setupRouter(config AuthConfig) *gin.Engine {
 
 func TestAPIKeyAuth_NoAuthConfigured(t *testing.T) {
 	// When no API key is configured, all requests should be allowed
-	router := setupRouter(AuthConfig{APIKey: ""})
+	router := setupRouter(AuthConfig{MasterAPIKey: ""})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
 	w := httptest.NewRecorder()
@@ -56,7 +56,7 @@ func TestAPIKeyAuth_NoAuthConfigured(t *testing.T) {
 }
 
 func TestAPIKeyAuth_ValidXAPIKeyHeader(t *testing.T) {
-	router := setupRouter(AuthConfig{APIKey: "secret-key"})
+	router := setupRouter(AuthConfig{MasterAPIKey: "secret-key"})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
 	req.Header.Set("X-API-Key", "secret-key")
@@ -68,7 +68,7 @@ func TestAPIKeyAuth_ValidXAPIKeyHeader(t *testing.T) {
 }
 
 func TestAPIKeyAuth_ValidBearerToken(t *testing.T) {
-	router := setupRouter(AuthConfig{APIKey: "secret-key"})
+	router := setupRouter(AuthConfig{MasterAPIKey: "secret-key"})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
 	req.Header.Set("Authorization", "Bearer secret-key")
@@ -80,7 +80,7 @@ func TestAPIKeyAuth_ValidBearerToken(t *testing.T) {
 }
 
 func TestAPIKeyAuth_ValidQueryParam(t *testing.T) {
-	router := setupRouter(AuthConfig{APIKey: "secret-key"})
+	router := setupRouter(AuthConfig{MasterAPIKey: "secret-key"})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/test?api_key=secret-key", nil)
 	w := httptest.NewRecorder()
@@ -91,7 +91,7 @@ func TestAPIKeyAuth_ValidQueryParam(t *testing.T) {
 }
 
 func TestAPIKeyAuth_InvalidKey(t *testing.T) {
-	router := setupRouter(AuthConfig{APIKey: "secret-key"})
+	router := setupRouter(AuthConfig{MasterAPIKey: "secret-key"})
 
 	tests := []struct {
 		name        string
@@ -139,13 +139,14 @@ func TestAPIKeyAuth_InvalidKey(t *testing.T) {
 			err := json.Unmarshal(w.Body.Bytes(), &resp)
 			require.NoError(t, err)
 			assert.Equal(t, "unauthorized", resp["error"])
-			assert.Contains(t, resp["message"], "invalid or missing API key")
+			assert.True(t, resp["message"] == "missing API key" || resp["message"] == "invalid API key",
+				"expected 'missing API key' or 'invalid API key', got: %s", resp["message"])
 		})
 	}
 }
 
 func TestAPIKeyAuth_SkipHealthEndpoint(t *testing.T) {
-	router := setupRouter(AuthConfig{APIKey: "secret-key"})
+	router := setupRouter(AuthConfig{MasterAPIKey: "secret-key"})
 
 	// Health endpoint should be accessible without auth
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
@@ -158,7 +159,7 @@ func TestAPIKeyAuth_SkipHealthEndpoint(t *testing.T) {
 
 func TestAPIKeyAuth_SkipHealthSubpaths(t *testing.T) {
 	router := gin.New()
-	router.Use(APIKeyAuth(AuthConfig{APIKey: "secret-key"}))
+	router.Use(APIKeyAuth(AuthConfig{MasterAPIKey: "secret-key"}))
 	router.GET("/api/v1/health/ready", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ready"})
 	})
@@ -172,7 +173,7 @@ func TestAPIKeyAuth_SkipHealthSubpaths(t *testing.T) {
 }
 
 func TestAPIKeyAuth_SkipMetricsEndpoint(t *testing.T) {
-	router := setupRouter(AuthConfig{APIKey: "secret-key"})
+	router := setupRouter(AuthConfig{MasterAPIKey: "secret-key"})
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	w := httptest.NewRecorder()
@@ -184,7 +185,7 @@ func TestAPIKeyAuth_SkipMetricsEndpoint(t *testing.T) {
 
 func TestAPIKeyAuth_SkipRootHealthEndpoint(t *testing.T) {
 	// Root /health endpoint should be accessible without auth for load balancers
-	router := setupRouter(AuthConfig{APIKey: "secret-key"})
+	router := setupRouter(AuthConfig{MasterAPIKey: "secret-key"})
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	w := httptest.NewRecorder()
@@ -200,7 +201,7 @@ func TestAPIKeyAuth_SkipRootHealthEndpoint(t *testing.T) {
 }
 
 func TestAPIKeyAuth_SkipUIPath(t *testing.T) {
-	router := setupRouter(AuthConfig{APIKey: "secret-key"})
+	router := setupRouter(AuthConfig{MasterAPIKey: "secret-key"})
 
 	req := httptest.NewRequest(http.MethodGet, "/ui/index.html", nil)
 	w := httptest.NewRecorder()
@@ -212,7 +213,7 @@ func TestAPIKeyAuth_SkipUIPath(t *testing.T) {
 
 func TestAPIKeyAuth_CustomSkipPaths(t *testing.T) {
 	router := setupRouter(AuthConfig{
-		APIKey:    "secret-key",
+		MasterAPIKey:    "secret-key",
 		SkipPaths: []string{"/custom/skip"},
 	})
 
@@ -227,7 +228,7 @@ func TestAPIKeyAuth_CustomSkipPaths(t *testing.T) {
 
 func TestAPIKeyAuth_XAPIKeyTakesPrecedence(t *testing.T) {
 	// If X-API-Key is set, it should be checked first
-	router := setupRouter(AuthConfig{APIKey: "secret-key"})
+	router := setupRouter(AuthConfig{MasterAPIKey: "secret-key"})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
 	// Valid X-API-Key should succeed even with invalid bearer
@@ -242,7 +243,7 @@ func TestAPIKeyAuth_XAPIKeyTakesPrecedence(t *testing.T) {
 
 func TestAPIKeyAuth_BearerFallback(t *testing.T) {
 	// If X-API-Key is empty, should fall back to Bearer token
-	router := setupRouter(AuthConfig{APIKey: "secret-key"})
+	router := setupRouter(AuthConfig{MasterAPIKey: "secret-key"})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
 	req.Header.Set("X-API-Key", "") // Empty, not missing
@@ -255,7 +256,7 @@ func TestAPIKeyAuth_BearerFallback(t *testing.T) {
 }
 
 func TestAPIKeyAuth_InvalidBearerFormat(t *testing.T) {
-	router := setupRouter(AuthConfig{APIKey: "secret-key"})
+	router := setupRouter(AuthConfig{MasterAPIKey: "secret-key"})
 
 	tests := []struct {
 		name   string
@@ -282,7 +283,7 @@ func TestAPIKeyAuth_InvalidBearerFormat(t *testing.T) {
 func TestAPIKeyAuth_MultipleSkipPaths(t *testing.T) {
 	router := gin.New()
 	router.Use(APIKeyAuth(AuthConfig{
-		APIKey:    "secret-key",
+		MasterAPIKey:    "secret-key",
 		SkipPaths: []string{"/public/a", "/public/b", "/public/c"},
 	}))
 	router.GET("/public/a", func(c *gin.Context) { c.String(http.StatusOK, "a") })

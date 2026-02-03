@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -659,12 +660,43 @@ func (s *AgentFieldServer) setupRoutes() {
 	})
 
 	// API key authentication middleware (supports headers + api_key query param)
-	s.Router.Use(middleware.APIKeyAuth(middleware.AuthConfig{
-		APIKey:    s.config.API.Auth.APIKey,
-		SkipPaths: s.config.API.Auth.SkipPaths,
-	}))
+	authConfig := middleware.AuthConfig{
+		MasterAPIKey: s.config.API.Auth.APIKey,
+		SkipPaths:    s.config.API.Auth.SkipPaths,
+	}
+
+	// Try to get API key storage from the storage provider
+	if keyStorage, ok := s.storage.(storage.APIKeyStorage); ok {
+		authConfig.KeyStorage = keyStorage
+		logger.Logger.Info().Msg("🔐 Multi-key API authentication enabled")
+	}
+
+	// Set up propagation secret for secure key context forwarding
+	if s.config.API.Auth.PropagationSecret != "" {
+		authConfig.PropagationSecret = []byte(s.config.API.Auth.PropagationSecret)
+	} else {
+		// Generate a random secret if not configured
+		secret := make([]byte, 32)
+		if _, err := rand.Read(secret); err == nil {
+			authConfig.PropagationSecret = secret
+		}
+	}
+
+	// Convert scope groups from config to types.ScopeGroup
+	if len(s.config.API.Auth.ScopeGroups) > 0 {
+		authConfig.ScopeGroups = make(map[string]types.ScopeGroup)
+		for name, cfg := range s.config.API.Auth.ScopeGroups {
+			authConfig.ScopeGroups[name] = types.ScopeGroup{
+				Name:        name,
+				Tags:        cfg.Tags,
+				Description: cfg.Description,
+			}
+		}
+	}
+
+	s.Router.Use(middleware.APIKeyAuth(authConfig))
 	if s.config.API.Auth.APIKey != "" {
-		logger.Logger.Info().Msg("🔐 API key authentication enabled")
+		logger.Logger.Info().Msg("🔐 Master API key authentication enabled")
 	}
 
 	// Expose Prometheus metrics
