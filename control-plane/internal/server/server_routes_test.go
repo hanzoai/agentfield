@@ -360,6 +360,25 @@ func (s *stubStorage) GetDeadLetterQueue(ctx context.Context, limit, offset int)
 func (s *stubStorage) DeleteFromDeadLetterQueue(ctx context.Context, ids []int64) error { return nil }
 func (s *stubStorage) ClearDeadLetterQueue(ctx context.Context) error                   { return nil }
 
+// API Key Management operations
+func (s *stubStorage) CreateKey(ctx context.Context, req types.APIKeyCreateRequest) (*types.APIKey, string, error) {
+	return nil, "", nil
+}
+func (s *stubStorage) GetKeyByID(ctx context.Context, id string) (*types.APIKey, error) {
+	return nil, nil
+}
+func (s *stubStorage) GetKeyByName(ctx context.Context, name string) (*types.APIKey, error) {
+	return nil, nil
+}
+func (s *stubStorage) VerifyKey(ctx context.Context, plainKey string) (*types.APIKey, error) {
+	return nil, nil
+}
+func (s *stubStorage) ListKeys(ctx context.Context) ([]*types.APIKey, error) { return nil, nil }
+func (s *stubStorage) UpdateKeyLastUsed(ctx context.Context, id string) error { return nil }
+func (s *stubStorage) DeleteKey(ctx context.Context, id string) error         { return nil }
+func (s *stubStorage) DisableKey(ctx context.Context, id string) error        { return nil }
+func (s *stubStorage) EnableKey(ctx context.Context, id string) error         { return nil }
+
 // stubPayloadStore implements services.PayloadStore
 type stubPayloadStore struct{}
 
