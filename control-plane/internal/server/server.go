@@ -20,6 +20,7 @@ import (
 	coreservices "github.com/Agent-Field/agentfield/control-plane/internal/core/services" // Core services
 	"github.com/Agent-Field/agentfield/control-plane/internal/events"                     // Event system
 	"github.com/Agent-Field/agentfield/control-plane/internal/handlers"                   // Agent handlers
+	"github.com/Agent-Field/agentfield/control-plane/internal/handlers/admin"             // Admin handlers
 	"github.com/Agent-Field/agentfield/control-plane/internal/handlers/ui"                // UI handlers
 	"github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/communication"
 	"github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/process"
@@ -1124,6 +1125,20 @@ func (s *AgentFieldServer) setupRoutes() {
 			settings.POST("/observability-webhook/redrive", obsHandler.RedriveHandler)
 			settings.GET("/observability-webhook/dlq", obsHandler.GetDeadLetterQueueHandler)
 			settings.DELETE("/observability-webhook/dlq", obsHandler.ClearDeadLetterQueueHandler)
+		}
+
+		// Admin API routes (require super key)
+		adminAPI := agentAPI.Group("/admin")
+		adminAPI.Use(admin.RequireSuperKey())
+		{
+			keyHandlers := admin.NewKeyHandlers(s.storage)
+			adminAPI.GET("/keys", keyHandlers.ListKeys)
+			adminAPI.POST("/keys", keyHandlers.CreateKey)
+			adminAPI.GET("/keys/:id", keyHandlers.GetKey)
+			adminAPI.DELETE("/keys/:id", keyHandlers.DeleteKey)
+			adminAPI.POST("/keys/:id/disable", keyHandlers.DisableKey)
+			adminAPI.POST("/keys/:id/enable", keyHandlers.EnableKey)
+			adminAPI.POST("/keys/check-access", keyHandlers.CheckAccess)
 		}
 	}
 
