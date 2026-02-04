@@ -850,12 +850,14 @@ func TestIntegration_AuditLogging(t *testing.T) {
 	// Create a scoped key
 	_, plainKey := ts.createKeyDirect("audit-key", []string{"finance"}, true, nil)
 
-	// Make access check requests
+	// Make access check requests (with small delay to ensure distinct timestamps)
 	body := map[string]interface{}{
 		"agent_id":   "finance-agent",
 		"agent_tags": []string{"finance"},
 	}
 	ts.makeRequest("POST", "/api/v1/check-agent-access", plainKey, body)
+
+	time.Sleep(10 * time.Millisecond) // Ensure distinct ordering
 
 	body["agent_tags"] = []string{"hr"}
 	ts.makeRequest("POST", "/api/v1/check-agent-access", plainKey, body)
@@ -863,8 +865,8 @@ func TestIntegration_AuditLogging(t *testing.T) {
 	// Wait for async logging
 	time.Sleep(100 * time.Millisecond)
 
-	// Query audit log directly
-	rows, err := ts.db.Query("SELECT allowed, deny_reason FROM access_audit_log ORDER BY timestamp")
+	// Query audit log directly (order by id for deterministic insertion order)
+	rows, err := ts.db.Query("SELECT allowed, deny_reason FROM access_audit_log ORDER BY id")
 	require.NoError(t, err)
 	defer rows.Close()
 
