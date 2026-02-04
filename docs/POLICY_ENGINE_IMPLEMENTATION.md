@@ -1755,49 +1755,74 @@ async execute<T = any>(
 
 ---
 
-## Migration Guide
+## Backwards Compatibility
 
-### Upgrading from Single API Key
+### No Migration Required
 
-1. **Add key configuration to `agentfield.yaml`:**
+The policy engine is **fully backwards compatible**. If you're using the simple single API key pattern, **no changes are required**:
+
+```bash
+# This still works exactly as before
+export AGENTFIELD_API_KEY="your-secret-key"
+```
+
+The `AGENTFIELD_API_KEY` environment variable continues to function as a **master key** with full access to all agents (`["*"]` scope). No YAML configuration is needed.
+
+**Development mode** (no authentication) also continues to work - simply don't set any API key:
+
+```bash
+# No AGENTFIELD_API_KEY set = development mode (all requests allowed)
+go run ./cmd/af dev
+```
+
+### Optional: Adding Scoped Keys
+
+If you want to provide limited access to specific teams or integrations, you can add scoped keys **in addition to** your master key. This is entirely optional.
+
+**Option A: Via Admin API** (recommended for production)
+
+Use the Admin API to create keys dynamically:
+
+```bash
+# Create a scoped key (requires master key or super key)
+curl -X POST http://localhost:8080/api/v1/admin/keys \
+  -H "X-API-Key: $AGENTFIELD_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "finance-team",
+    "scopes": ["finance", "shared"],
+    "description": "Access to finance agents"
+  }'
+```
+
+**Option B: Via YAML Configuration**
+
+Define scoped keys in `agentfield.yaml`:
 
 ```yaml
 api:
   auth:
-    # Keep existing key as super key
+    # Your master key continues to work (set via AGENTFIELD_API_KEY env var)
+    # Additional scoped keys below are optional
     keys:
-      - name: admin
-        scopes: ["*"]
-        description: "Migrated from legacy single key"
+      - name: finance-team
+        scopes: ["finance", "shared"]
+      - name: external-integration
+        scopes: ["public"]
 ```
 
-2. **Set environment variable:**
+Set the key values via environment variables:
 
 ```bash
-# Use the same key value
-export AGENTFIELD_API_KEY_ADMIN="your-existing-key-value"
+# Master key (unchanged)
+export AGENTFIELD_API_KEY="your-master-key"
+
+# Additional scoped keys
+export AGENTFIELD_API_KEY_FINANCE_TEAM="finance-team-secret"
+export AGENTFIELD_API_KEY_EXTERNAL_INTEGRATION="external-secret"
 ```
 
-3. **Test access** - All existing workflows should continue working.
-
-4. **Add scoped keys** as needed for different teams/integrations.
-
-### Adding Scoped Keys
-
-1. **Identify access patterns** - Which teams access which agents?
-
-2. **Define scopes** based on agent tags:
-
-```yaml
-keys:
-  - name: finance-team
-    scopes: ["finance", "shared"]
-
-  - name: external-integration
-    scopes: ["public"]
-```
-
-3. **Update agent tags** to match scopes:
+**Tag your agents** to match scopes:
 
 ```python
 app = Agent(
@@ -1806,9 +1831,10 @@ app = Agent(
 )
 ```
 
-4. **Distribute scoped keys** to appropriate teams.
-
-5. **Monitor audit log** for access patterns and adjust.
+**Access patterns:**
+- Master key (`AGENTFIELD_API_KEY`) → full access to all agents
+- `finance-team` key → only agents tagged with `finance` or `shared`
+- `external-integration` key → only agents tagged with `public`
 
 ---
 
