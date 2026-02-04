@@ -10,33 +10,13 @@ import (
 )
 
 // APIKeyStorage defines the interface for API key persistence.
+// Keys are loaded from config at startup; this interface provides lookup during requests.
 type APIKeyStorage interface {
-	// CreateKey creates a new API key and returns the plain key value (only returned once).
-	CreateKey(ctx context.Context, req types.APIKeyCreateRequest) (*types.APIKey, string, error)
-
-	// GetKeyByID retrieves a key by its ID.
-	GetKeyByID(ctx context.Context, id string) (*types.APIKey, error)
-
-	// GetKeyByName retrieves a key by its name.
-	GetKeyByName(ctx context.Context, name string) (*types.APIKey, error)
-
 	// VerifyKey verifies a plain key and returns the APIKey if valid.
 	VerifyKey(ctx context.Context, plainKey string) (*types.APIKey, error)
 
-	// ListKeys returns all API keys (without sensitive data).
-	ListKeys(ctx context.Context) ([]*types.APIKey, error)
-
 	// UpdateKeyLastUsed updates the last_used_at timestamp.
 	UpdateKeyLastUsed(ctx context.Context, id string) error
-
-	// DeleteKey removes an API key.
-	DeleteKey(ctx context.Context, id string) error
-
-	// DisableKey disables an API key.
-	DisableKey(ctx context.Context, id string) error
-
-	// EnableKey enables an API key.
-	EnableKey(ctx context.Context, id string) error
 }
 
 // AccessAuditStorage defines the interface for audit logging.

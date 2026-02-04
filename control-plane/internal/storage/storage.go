@@ -189,16 +189,9 @@ type StorageProvider interface {
 	DeleteFromDeadLetterQueue(ctx context.Context, ids []int64) error
 	ClearDeadLetterQueue(ctx context.Context) error
 
-	// API Key Management
-	CreateKey(ctx context.Context, req types.APIKeyCreateRequest) (*types.APIKey, string, error)
-	GetKeyByID(ctx context.Context, id string) (*types.APIKey, error)
-	GetKeyByName(ctx context.Context, name string) (*types.APIKey, error)
+	// API Key Management (keys loaded from config at startup)
 	VerifyKey(ctx context.Context, plainKey string) (*types.APIKey, error)
-	ListKeys(ctx context.Context) ([]*types.APIKey, error)
 	UpdateKeyLastUsed(ctx context.Context, id string) error
-	DeleteKey(ctx context.Context, id string) error
-	DisableKey(ctx context.Context, id string) error
-	EnableKey(ctx context.Context, id string) error
 }
 
 // ComponentDIDRequest represents a component DID to be stored

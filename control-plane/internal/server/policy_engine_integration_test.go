@@ -16,7 +16,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/Agent-Field/agentfield/control-plane/internal/handlers/admin"
 	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
 	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
@@ -31,65 +30,6 @@ func init() {
 // Uses direct SQL to avoid needing access to LocalStorage internals.
 type testKeyStorage struct {
 	db *sql.DB
-}
-
-func (s *testKeyStorage) CreateKey(ctx context.Context, req types.APIKeyCreateRequest) (*types.APIKey, string, error) {
-	keyID := storage.GenerateKeyID()
-	plainKey, err := storage.GenerateAPIKey("sk")
-	if err != nil {
-		return nil, "", err
-	}
-
-	keyHash, err := storage.HashAPIKey(plainKey)
-	if err != nil {
-		return nil, "", err
-	}
-
-	scopes := req.Scopes
-	if scopes == nil {
-		scopes = []string{}
-	}
-	scopesJSON, _ := json.Marshal(scopes)
-
-	now := time.Now()
-	key := &types.APIKey{
-		ID:          keyID,
-		Name:        req.Name,
-		KeyHash:     keyHash,
-		Scopes:      scopes,
-		Description: req.Description,
-		Enabled:     true,
-		CreatedAt:   now,
-		ExpiresAt:   req.ExpiresAt,
-	}
-
-	var expiresAtStr interface{} = nil
-	if req.ExpiresAt != nil {
-		expiresAtStr = req.ExpiresAt.Format(time.RFC3339)
-	}
-
-	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO api_keys (id, name, key_hash, scopes, description, enabled, created_at, expires_at)
-		 VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
-		key.ID, key.Name, key.KeyHash, string(scopesJSON), key.Description, now.Format(time.RFC3339), expiresAtStr,
-	)
-	if err != nil {
-		return nil, "", err
-	}
-
-	return key, plainKey, nil
-}
-
-func (s *testKeyStorage) GetKeyByID(ctx context.Context, id string) (*types.APIKey, error) {
-	return s.scanKey(s.db.QueryRowContext(ctx,
-		`SELECT id, name, key_hash, scopes, description, enabled, created_at, expires_at, last_used_at
-		 FROM api_keys WHERE id = ?`, id))
-}
-
-func (s *testKeyStorage) GetKeyByName(ctx context.Context, name string) (*types.APIKey, error) {
-	return s.scanKey(s.db.QueryRowContext(ctx,
-		`SELECT id, name, key_hash, scopes, description, enabled, created_at, expires_at, last_used_at
-		 FROM api_keys WHERE name = ?`, name))
 }
 
 func (s *testKeyStorage) VerifyKey(ctx context.Context, plainKey string) (*types.APIKey, error) {
@@ -114,74 +54,9 @@ func (s *testKeyStorage) VerifyKey(ctx context.Context, plainKey string) (*types
 	return nil, sql.ErrNoRows
 }
 
-func (s *testKeyStorage) ListKeys(ctx context.Context) ([]*types.APIKey, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, name, key_hash, scopes, description, enabled, created_at, expires_at, last_used_at
-		 FROM api_keys ORDER BY created_at DESC`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var keys []*types.APIKey
-	for rows.Next() {
-		key, err := s.scanKeyFromRows(rows)
-		if err != nil {
-			return nil, err
-		}
-		keys = append(keys, key)
-	}
-	return keys, nil
-}
-
 func (s *testKeyStorage) UpdateKeyLastUsed(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE api_keys SET last_used_at = ? WHERE id = ?`, time.Now().Format(time.RFC3339), id)
 	return err
-}
-
-func (s *testKeyStorage) DeleteKey(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM api_keys WHERE id = ?`, id)
-	return err
-}
-
-func (s *testKeyStorage) DisableKey(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE api_keys SET enabled = 0 WHERE id = ?`, id)
-	return err
-}
-
-func (s *testKeyStorage) EnableKey(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE api_keys SET enabled = 1 WHERE id = ?`, id)
-	return err
-}
-
-func (s *testKeyStorage) scanKey(row *sql.Row) (*types.APIKey, error) {
-	key := &types.APIKey{}
-	var scopesRaw string
-	var description, expiresAt, lastUsedAt sql.NullString
-	var enabledInt int
-	var createdAtStr string
-
-	err := row.Scan(&key.ID, &key.Name, &key.KeyHash, &scopesRaw, &description, &enabledInt, &createdAtStr, &expiresAt, &lastUsedAt)
-	if err != nil {
-		return nil, err
-	}
-
-	key.Enabled = enabledInt == 1
-	key.CreatedAt, _ = time.Parse(time.RFC3339, createdAtStr)
-	if description.Valid {
-		key.Description = description.String
-	}
-	if expiresAt.Valid && expiresAt.String != "" {
-		t, _ := time.Parse(time.RFC3339, expiresAt.String)
-		key.ExpiresAt = &t
-	}
-	if lastUsedAt.Valid && lastUsedAt.String != "" {
-		t, _ := time.Parse(time.RFC3339, lastUsedAt.String)
-		key.LastUsedAt = &t
-	}
-	json.Unmarshal([]byte(scopesRaw), &key.Scopes)
-
-	return key, nil
 }
 
 func (s *testKeyStorage) scanKeyFromRows(rows *sql.Rows) (*types.APIKey, error) {
@@ -405,19 +280,6 @@ func (ts *testServer) setupRouter() {
 
 			c.JSON(http.StatusOK, decision)
 		})
-
-		// Admin routes
-		adminGroup := api.Group("/admin")
-		adminGroup.Use(admin.RequireSuperKey())
-		{
-			handlers := admin.NewKeyHandlers(ts.keyStorage)
-			adminGroup.GET("/keys", handlers.ListKeys)
-			adminGroup.POST("/keys", handlers.CreateKey)
-			adminGroup.GET("/keys/:id", handlers.GetKey)
-			adminGroup.DELETE("/keys/:id", handlers.DeleteKey)
-			adminGroup.POST("/keys/:id/disable", handlers.DisableKey)
-			adminGroup.POST("/keys/:id/enable", handlers.EnableKey)
-		}
 	}
 
 	ts.router = router
@@ -493,11 +355,6 @@ func TestIntegration_MasterKeyAuth(t *testing.T) {
 		assert.Equal(t, "master", resp["key_name"])
 		assert.True(t, resp["is_super"].(bool))
 	})
-
-	t.Run("master key can access admin endpoints", func(t *testing.T) {
-		w := ts.makeRequest("GET", "/api/v1/admin/keys", ts.masterKey, nil)
-		assert.Equal(t, http.StatusOK, w.Code)
-	})
 }
 
 func TestIntegration_ScopedKeyAuth(t *testing.T) {
@@ -521,11 +378,6 @@ func TestIntegration_ScopedKeyAuth(t *testing.T) {
 
 		scopes := resp["scopes"].([]interface{})
 		assert.Len(t, scopes, 2)
-	})
-
-	t.Run("scoped key cannot access admin endpoints", func(t *testing.T) {
-		w := ts.makeRequest("GET", "/api/v1/admin/keys", plainKey, nil)
-		assert.Equal(t, http.StatusForbidden, w.Code)
 	})
 }
 
@@ -765,81 +617,6 @@ func TestIntegration_KeyPropagation(t *testing.T) {
 		// Verify scopes from context - need to handle the JSON properly
 		_ = scopesJSON
 		_ = timestamp
-	})
-}
-
-func TestIntegration_AdminKeyManagement(t *testing.T) {
-	ts := setupIntegrationTest(t)
-	defer ts.cleanup()
-
-	t.Run("create key via API", func(t *testing.T) {
-		body := types.APIKeyCreateRequest{
-			Name:        "api-created-key",
-			Scopes:      []string{"test"},
-			Description: "Created via API",
-		}
-
-		w := ts.makeRequest("POST", "/api/v1/admin/keys", ts.masterKey, body)
-		assert.Equal(t, http.StatusCreated, w.Code)
-
-		var resp struct {
-			Key      types.APIKeyResponse `json:"key"`
-			KeyValue string               `json:"key_value"`
-		}
-		json.Unmarshal(w.Body.Bytes(), &resp)
-
-		assert.Equal(t, "api-created-key", resp.Key.Name)
-		assert.NotEmpty(t, resp.KeyValue)
-
-		// Verify the created key works
-		w2 := ts.makeRequest("GET", "/api/v1/auth-info", resp.KeyValue, nil)
-		assert.Equal(t, http.StatusOK, w2.Code)
-	})
-
-	t.Run("full key lifecycle", func(t *testing.T) {
-		// Create
-		createBody := types.APIKeyCreateRequest{
-			Name:   "lifecycle-key",
-			Scopes: []string{"test"},
-		}
-		w := ts.makeRequest("POST", "/api/v1/admin/keys", ts.masterKey, createBody)
-		require.Equal(t, http.StatusCreated, w.Code)
-
-		var createResp struct {
-			Key      types.APIKeyResponse `json:"key"`
-			KeyValue string               `json:"key_value"`
-		}
-		json.Unmarshal(w.Body.Bytes(), &createResp)
-		keyID := createResp.Key.ID
-		keyValue := createResp.KeyValue
-
-		// Verify key works
-		w = ts.makeRequest("GET", "/api/v1/auth-info", keyValue, nil)
-		assert.Equal(t, http.StatusOK, w.Code)
-
-		// Disable via API
-		w = ts.makeRequest("POST", "/api/v1/admin/keys/"+keyID+"/disable", ts.masterKey, nil)
-		assert.Equal(t, http.StatusOK, w.Code)
-
-		// Verify key no longer works
-		w = ts.makeRequest("GET", "/api/v1/auth-info", keyValue, nil)
-		assert.Equal(t, http.StatusUnauthorized, w.Code)
-
-		// Enable via API
-		w = ts.makeRequest("POST", "/api/v1/admin/keys/"+keyID+"/enable", ts.masterKey, nil)
-		assert.Equal(t, http.StatusOK, w.Code)
-
-		// Verify key works again
-		w = ts.makeRequest("GET", "/api/v1/auth-info", keyValue, nil)
-		assert.Equal(t, http.StatusOK, w.Code)
-
-		// Delete via API
-		w = ts.makeRequest("DELETE", "/api/v1/admin/keys/"+keyID, ts.masterKey, nil)
-		assert.Equal(t, http.StatusOK, w.Code)
-
-		// Verify key no longer works
-		w = ts.makeRequest("GET", "/api/v1/auth-info", keyValue, nil)
-		assert.Equal(t, http.StatusUnauthorized, w.Code)
 	})
 }
 
