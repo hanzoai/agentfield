@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -99,11 +100,11 @@ func TestGetNodeDetailsHandler_Structure(t *testing.T) {
 	router := gin.New()
 	router.GET("/api/ui/v1/nodes/:nodeId", handler.GetNodeDetailsHandler)
 
-	// Test with missing nodeId (should return 400)
+	// Test with missing nodeId - Gin returns 404 because the route doesn't match
 	req := httptest.NewRequest(http.MethodGet, "/api/ui/v1/nodes/", nil)
 	resp := httptest.NewRecorder()
 	router.ServeHTTP(resp, req)
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
+	assert.Equal(t, http.StatusNotFound, resp.Code)
 
 	// Test with nodeId (should return 404 if not found, but handler works)
 	req = httptest.NewRequest(http.MethodGet, "/api/ui/v1/nodes/node-1", nil)
@@ -137,6 +138,7 @@ func TestGetNodeStatusHandler_Structure(t *testing.T) {
 
 	mockAgentClient := &MockAgentClientForUI{}
 	mockAgentService := &MockAgentServiceForUI{}
+	mockAgentClient.On("GetAgentStatus", mock.Anything, "node-1").Return(nil, fmt.Errorf("agent not found"))
 	statusManager := services.NewStatusManager(realStorage, services.StatusManagerConfig{}, nil, mockAgentClient)
 	uiService := services.NewUIService(realStorage, mockAgentClient, mockAgentService, statusManager)
 
