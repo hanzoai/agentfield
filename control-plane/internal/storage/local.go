@@ -3030,6 +3030,7 @@ func (ls *LocalStorage) populateWorkflowCleanupCounts(ctx context.Context, targe
 	result.DeletedRecords["workflow_executions"] = ls.countWorkflowExecutions(ctx, workflowIDs, runIDs)
 	result.DeletedRecords["workflow_execution_events"] = ls.countWorkflowExecutionEvents(ctx, workflowIDs, runIDs)
 	result.DeletedRecords["workflows"] = ls.countWorkflows(ctx, workflowIDs)
+	result.DeletedRecords["workflow_runs"] = ls.countWorkflowRuns(ctx, targets.primaryWorkflowID, workflowIDs, runIDs)
 }
 
 func (ls *LocalStorage) performWorkflowCleanup(ctx context.Context, tx DBTX, targets *workflowCleanupTargets) error {
@@ -3246,6 +3247,39 @@ func (ls *LocalStorage) countWorkflows(ctx context.Context, workflowIDs []string
 	query := fmt.Sprintf(`SELECT COUNT(*) FROM workflows WHERE workflow_id IN (%s)`, makePlaceholders(len(workflowIDs)))
 	var count int
 	if err := ls.db.QueryRowContext(ctx, query, stringsToInterfaces(workflowIDs)...).Scan(&count); err != nil {
+		return 0
+	}
+	return count
+}
+
+func (ls *LocalStorage) countWorkflowRuns(ctx context.Context, primaryWorkflowID string, workflowIDs, runIDs []string) int {
+	conditions := []string{}
+	args := []interface{}{}
+
+	if primaryWorkflowID != "" {
+		conditions = append(conditions, "root_workflow_id = ?")
+		args = append(args, primaryWorkflowID)
+		conditions = append(conditions, "run_id = ?")
+		args = append(args, primaryWorkflowID)
+	}
+	if len(workflowIDs) > 0 {
+		placeholders := makePlaceholders(len(workflowIDs))
+		conditions = append(conditions, fmt.Sprintf("root_workflow_id IN (%s)", placeholders))
+		args = append(args, stringsToInterfaces(workflowIDs)...)
+	}
+	if len(runIDs) > 0 {
+		placeholders := makePlaceholders(len(runIDs))
+		conditions = append(conditions, fmt.Sprintf("run_id IN (%s)", placeholders))
+		args = append(args, stringsToInterfaces(runIDs)...)
+	}
+
+	if len(conditions) == 0 {
+		return 0
+	}
+
+	query := "SELECT COUNT(*) FROM workflow_runs WHERE " + strings.Join(conditions, " OR ")
+	var count int
+	if err := ls.db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
 		return 0
 	}
 	return count

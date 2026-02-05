@@ -430,12 +430,14 @@ func TestVCService_VerifyVC_Success(t *testing.T) {
 func TestVCService_VerifyVC_InvalidDocument(t *testing.T) {
 	vcService, _, _, _ := setupVCTestEnvironment(t)
 
+	// Valid JSON but missing VC fields - parses into empty VCDocument struct,
+	// then fails when trying to resolve the empty issuer DID
 	invalidDoc := json.RawMessage(`{"invalid": "json"}`)
 	verifyResp, err := vcService.VerifyVC(invalidDoc)
 	require.NoError(t, err)
 	require.NotNil(t, verifyResp)
 	require.False(t, verifyResp.Valid)
-	require.Contains(t, verifyResp.Error, "failed to parse VC document")
+	require.Contains(t, verifyResp.Error, "failed to resolve issuer DID")
 }
 
 func TestVCService_VerifyVC_DisabledSystem(t *testing.T) {
@@ -687,8 +689,8 @@ func TestVCService_CreateWorkflowVC_Success(t *testing.T) {
 	require.Equal(t, 2, workflowVC.CompletedSteps)
 	require.NotEmpty(t, workflowVC.WorkflowVCID)
 
-	// Verify workflow VC was stored
-	storedVC, err := provider.GetWorkflowVC(ctx, "workflow-1")
+	// Verify workflow VC was stored - GetWorkflowVC looks up by workflow_vc_id, not workflow_id
+	storedVC, err := provider.GetWorkflowVC(ctx, workflowVC.WorkflowVCID)
 	require.NoError(t, err)
 	require.NotNil(t, storedVC)
 	require.Equal(t, workflowVC.WorkflowVCID, storedVC.WorkflowVCID)
@@ -991,15 +993,25 @@ func TestVCService_VerifyExecutionVCComprehensive_IssuerMismatch(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, storedVC)
 
-	// Tamper with issuer DID - create a new VC with tampered issuer
-	tamperedVC := *storedVC
-	tamperedVC.IssuerDID = "did:key:tampered"
+	// Tamper with the VCDocument JSON to change the issuer field inside it.
+	// The SQL upsert only updates vc_document (not issuer_did metadata), so we
+	// must modify the JSON document to create a mismatch between the stored
+	// metadata issuer_did and the issuer field inside the VC document.
+	var vcDoc types.VCDocument
+	require.NoError(t, json.Unmarshal(storedVC.VCDocument, &vcDoc))
+	vcDoc.Issuer = "did:key:tampered"
+	tamperedDocBytes, err := json.Marshal(vcDoc)
+	require.NoError(t, err)
 
-	// Store tampered VC using vcStorage
+	tamperedVC := *storedVC
+	tamperedVC.VCDocument = tamperedDocBytes
+
+	// Store tampered VC using vcStorage - the upsert updates vc_document but
+	// preserves the original issuer_did in metadata, creating the mismatch
 	err = vcService.vcStorage.StoreExecutionVC(ctx, &tamperedVC)
 	require.NoError(t, err)
 
-	// Verify - should detect issuer mismatch
+	// Verify - should detect issuer mismatch between metadata and VC document
 	result, err := vcService.VerifyExecutionVCComprehensive("exec-mismatch")
 	require.NoError(t, err)
 	require.NotNil(t, result)

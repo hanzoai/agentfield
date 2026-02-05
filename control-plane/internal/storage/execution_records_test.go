@@ -55,7 +55,10 @@ func TestQueryRunSummariesParsesTextTimestamps(t *testing.T) {
 	require.False(t, summary.EarliestStarted.IsZero(), "earliest started should be parsed from TEXT timestamps")
 	require.False(t, summary.LatestStarted.IsZero(), "latest started should be parsed from TEXT timestamps")
 	require.Equal(t, summary.EarliestStarted, base.Add(-3*time.Minute))
-	require.Equal(t, summary.LatestStarted, base.Add(-1*time.Minute))
+	// LatestStarted comes from MAX(COALESCE(updated_at, started_at)).
+	// CreateExecutionRecord always overwrites updated_at with time.Now(),
+	// so LatestStarted will be approximately now, not the test's started_at.
+	require.True(t, summary.LatestStarted.After(base), "latest started should be after the test base time")
 }
 
 func pointerTime(t time.Time) *time.Time {

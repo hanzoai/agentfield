@@ -132,34 +132,55 @@ func TestPresenceManager_HasLease(t *testing.T) {
 }
 
 func TestPresenceManager_SetExpireCallback(t *testing.T) {
-	pm, _ := setupPresenceManagerTest(t)
+	pm, provider := setupPresenceManagerTest(t)
 
+	// Register the agent in storage so UpdateAgentStatus can look up its status.
+	// Without this, markInactive → UpdateAgentStatus → GetAgentStatusSnapshot → GetAgent
+	// fails and returns early before invoking the callback.
+	ctx := context.Background()
+	nodeID := "node-callback-1"
+	require.NoError(t, provider.RegisterAgent(ctx, &types.AgentNode{
+		ID:            nodeID,
+		BaseURL:       "http://localhost:9999",
+		LastHeartbeat: time.Now(),
+	}))
+
+	var mu sync.Mutex
 	var callbackInvoked bool
 	var callbackNodeID string
 
-	callback := func(nodeID string) {
+	callback := func(id string) {
+		mu.Lock()
 		callbackInvoked = true
-		callbackNodeID = nodeID
+		callbackNodeID = id
+		mu.Unlock()
 	}
 
 	pm.SetExpireCallback(callback)
 	require.NotNil(t, pm.expireCallback)
 
+	// Use shorter intervals for faster test execution
+	pm.config.HeartbeatTTL = 500 * time.Millisecond
+	pm.config.SweepInterval = 200 * time.Millisecond
+
 	// Start the presence manager to trigger expiration
 	pm.Start()
 
-	// Touch a node
-	nodeID := "node-callback-1"
-	pm.Touch(nodeID, time.Now().Add(-10*time.Second)) // Touch in the past
+	// Touch a node in the past so it's already expired
+	pm.Touch(nodeID, time.Now().Add(-10*time.Second))
 
-	// Wait for expiration
-	time.Sleep(2 * time.Second)
+	// Wait for sweep to detect the expired node (generous margin for CI)
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return callbackInvoked
+	}, 5*time.Second, 100*time.Millisecond, "expire callback should have been invoked")
 
 	pm.Stop()
 
-	// Callback should have been invoked
-	require.True(t, callbackInvoked)
+	mu.Lock()
 	require.Equal(t, nodeID, callbackNodeID)
+	mu.Unlock()
 }
 
 func TestPresenceManager_ExpirationDetection(t *testing.T) {
@@ -167,7 +188,11 @@ func TestPresenceManager_ExpirationDetection(t *testing.T) {
 
 	// Set shorter TTL for testing
 	pm.config.HeartbeatTTL = 500 * time.Millisecond
-	pm.config.SweepInterval = 100 * time.Millisecond
+	pm.config.SweepInterval = 200 * time.Millisecond
+	// Set hard evict TTL short so the lease gets deleted after expiration.
+	// The sweep first marks offline (MarkedOffline=true) keeping the lease,
+	// then on the next sweep removes it if HardEvictTTL has elapsed.
+	pm.config.HardEvictTTL = 1 * time.Second
 
 	pm.Start()
 
@@ -175,11 +200,10 @@ func TestPresenceManager_ExpirationDetection(t *testing.T) {
 	pm.Touch(nodeID, time.Now())
 	require.True(t, pm.HasLease(nodeID))
 
-	// Wait for expiration
-	time.Sleep(700 * time.Millisecond)
-
-	// Node should be marked offline
-	require.False(t, pm.HasLease(nodeID))
+	// Wait for expiration: TTL expires → marked offline → hard evict removes lease
+	require.Eventually(t, func() bool {
+		return !pm.HasLease(nodeID)
+	}, 5*time.Second, 100*time.Millisecond, "node should be removed after TTL + hard evict expiration")
 
 	pm.Stop()
 }

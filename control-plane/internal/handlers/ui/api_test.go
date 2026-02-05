@@ -177,8 +177,17 @@ func TestRefreshNodeStatusHandler_Structure(t *testing.T) {
 	require.NoError(t, err)
 	defer realStorage.Close(ctx)
 
+	// Register the agent in storage so status lookups succeed
+	require.NoError(t, realStorage.RegisterAgent(ctx, &types.AgentNode{
+		ID:      "node-1",
+		BaseURL: "http://localhost:9999",
+	}))
+
 	mockAgentClient := &MockAgentClientForUI{}
 	mockAgentService := &MockAgentServiceForUI{}
+	// Configure mock to return an error when GetAgentStatus is called during refresh.
+	// A failed health check marks the agent as inactive but does NOT fail the request.
+	mockAgentClient.On("GetAgentStatus", mock.Anything, "node-1").Return(nil, fmt.Errorf("agent not found"))
 	statusManager := services.NewStatusManager(realStorage, services.StatusManagerConfig{}, nil, mockAgentClient)
 	uiService := services.NewUIService(realStorage, mockAgentClient, mockAgentService, statusManager)
 
@@ -191,8 +200,14 @@ func TestRefreshNodeStatusHandler_Structure(t *testing.T) {
 
 	router.ServeHTTP(resp, req)
 
-	// Should handle request
-	assert.True(t, resp.Code >= http.StatusBadRequest) // Any response is valid
+	// RefreshNodeStatus succeeds even when health check fails — the agent is marked
+	// as inactive rather than causing an HTTP error. Verify we get a valid response.
+	assert.Equal(t, http.StatusOK, resp.Code)
+
+	var result map[string]interface{}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &result))
+	// The status should reflect the agent being inactive after failed health check
+	assert.Contains(t, result, "state")
 }
 
 // TestBulkNodeStatusHandler_Validation tests bulk node status handler request validation
@@ -219,8 +234,14 @@ func TestBulkNodeStatusHandler_Validation(t *testing.T) {
 
 	mockAgentClient := &MockAgentClientForUI{}
 	mockAgentService := &MockAgentServiceForUI{}
+	// Set up mock to handle any GetAgentStatus calls (health check returns error → agent marked inactive)
+	mockAgentClient.On("GetAgentStatus", mock.Anything, mock.Anything).Return(nil, fmt.Errorf("agent not reachable"))
 	statusManager := services.NewStatusManager(realStorage, services.StatusManagerConfig{}, nil, mockAgentClient)
 	uiService := services.NewUIService(realStorage, mockAgentClient, mockAgentService, statusManager)
+
+	// Register agents in storage so status lookups succeed
+	require.NoError(t, realStorage.RegisterAgent(ctx, &types.AgentNode{ID: "node-1", BaseURL: "http://localhost:9991"}))
+	require.NoError(t, realStorage.RegisterAgent(ctx, &types.AgentNode{ID: "node-2", BaseURL: "http://localhost:9992"}))
 
 	handler := NewNodesHandler(uiService)
 	router := gin.New()
@@ -248,8 +269,8 @@ func TestBulkNodeStatusHandler_Validation(t *testing.T) {
 	resp = httptest.NewRecorder()
 
 	router.ServeHTTP(resp, req)
-	// Should process request (may return error if nodes don't exist, but handler works)
-	assert.True(t, resp.Code >= http.StatusOK)
+	// Should process request successfully (agents exist, health checks fail gracefully)
+	assert.Equal(t, http.StatusOK, resp.Code)
 }
 
 // TestGetDashboardSummaryHandler_Structure tests dashboard handler structure
