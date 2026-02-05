@@ -364,7 +364,7 @@ func processHeartbeatAsync(storageProvider storage.StorageProvider, uiService *s
 }
 
 // RegisterNodeHandler handles the registration of a new agent node.
-func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *services.UIService, didService *services.DIDService, presenceManager *services.PresenceManager) gin.HandlerFunc {
+func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *services.UIService, didService *services.DIDService, presenceManager *services.PresenceManager, didWebService *services.DIDWebService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
 		var newNode types.AgentNode
@@ -555,6 +555,16 @@ func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *ser
 				logger.Logger.Debug().Msgf("✅ Node %s re-registered with DID service: %s", newNode.ID, didResponse.Message)
 			} else {
 				logger.Logger.Debug().Msgf("✅ Node %s registered with DID: %s", newNode.ID, didResponse.IdentityPackage.AgentDID.DID)
+			}
+		}
+
+		// Create DID:web document so the DID auth middleware can verify this agent.
+		// This is non-fatal — DID:key registration above is the critical path.
+		if didWebService != nil {
+			if _, _, err := didWebService.GetOrCreateDIDDocument(ctx, newNode.ID); err != nil {
+				logger.Logger.Warn().Err(err).Msgf("⚠️ DID:web document creation failed for node %s (non-fatal)", newNode.ID)
+			} else {
+				logger.Logger.Debug().Msgf("✅ DID:web document ensured for node %s", newNode.ID)
 			}
 		}
 
@@ -1124,7 +1134,7 @@ func BulkNodeStatusHandler(statusManager *services.StatusManager, storageProvide
 
 // RegisterServerlessAgentHandler handles the registration of a serverless agent node
 // by discovering its capabilities via the /discover endpoint
-func RegisterServerlessAgentHandler(storageProvider storage.StorageProvider, uiService *services.UIService, didService *services.DIDService, presenceManager *services.PresenceManager) gin.HandlerFunc {
+func RegisterServerlessAgentHandler(storageProvider storage.StorageProvider, uiService *services.UIService, didService *services.DIDService, presenceManager *services.PresenceManager, didWebService *services.DIDWebService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
 
@@ -1315,6 +1325,16 @@ func RegisterServerlessAgentHandler(storageProvider storage.StorageProvider, uiS
 				// Don't fail the registration, just log the error
 			} else if didResponse.Success {
 				logger.Logger.Info().Msgf("✅ Serverless agent %s registered with DID service", newNode.ID)
+			}
+		}
+
+		// Create DID:web document so the DID auth middleware can verify this agent.
+		// This is non-fatal — DID:key registration above is the critical path.
+		if didWebService != nil {
+			if _, _, err := didWebService.GetOrCreateDIDDocument(ctx, newNode.ID); err != nil {
+				logger.Logger.Warn().Err(err).Msgf("⚠️ DID:web document creation failed for serverless agent %s (non-fatal)", newNode.ID)
+			} else {
+				logger.Logger.Debug().Msgf("✅ DID:web document ensured for serverless agent %s", newNode.ID)
 			}
 		}
 

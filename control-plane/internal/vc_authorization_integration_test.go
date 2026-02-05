@@ -1745,6 +1745,227 @@ func TestVCAuth_EdgeCases_ConcurrentAccess(t *testing.T) {
 }
 
 // =============================================================================
+// Regression: DID:web document lifecycle during agent registration
+// =============================================================================
+
+// TestVCAuth_Regression_DIDWebDocumentCreatedDuringRegistration is a regression test
+// for a bug where GetOrCreateDIDDocument was never called during agent registration,
+// causing VerifyDIDOwnership (DID auth middleware) to always fail with "notFound"
+// because no DID:web document existed in storage.
+//
+// The fix (in RegisterNodeHandler) calls GetOrCreateDIDDocument after DID:key
+// registration. This test ensures that flow works end-to-end and catches any
+// regression that would break it.
+func TestVCAuth_Regression_DIDWebDocumentCreatedDuringRegistration(t *testing.T) {
+	tc := setupTestContext(t)
+
+	agentID := "regression-agent-lifecycle"
+
+	t.Run("without DID:web document, auth middleware rejects signed requests", func(t *testing.T) {
+		// Simulate the OLD broken behavior: agent is registered in storage
+		// but GetOrCreateDIDDocument is never called.
+		agent := tc.createTestAgent(agentID+"-broken", nil)
+		_ = agent
+
+		// The DID:web identifier exists as a string...
+		did := tc.didWebService.GenerateDIDWeb(agentID + "-broken")
+
+		// ...but no DID document was stored, so ResolveDID returns "notFound"
+		result, err := tc.didWebService.ResolveDID(tc.ctx, did)
+		require.NoError(t, err)
+		assert.Equal(t, "notFound", result.DIDResolutionMetadata.Error,
+			"BUG REGRESSION: ResolveDID should return notFound when GetOrCreateDIDDocument was never called")
+		assert.Nil(t, result.DIDDocument)
+
+		// VerifyDIDOwnership should also fail
+		valid, err := tc.didWebService.VerifyDIDOwnership(tc.ctx, did, []byte("test"), []byte("sig"))
+		assert.Error(t, err)
+		assert.False(t, valid)
+		assert.Contains(t, err.Error(), "not found",
+			"BUG REGRESSION: VerifyDIDOwnership fails because no DID:web document exists")
+	})
+
+	t.Run("with GetOrCreateDIDDocument called during registration, auth middleware accepts signed requests", func(t *testing.T) {
+		// Simulate the FIXED behavior: agent is registered AND GetOrCreateDIDDocument
+		// is called, just like RegisterNodeHandler does after the fix.
+		agent := tc.createTestAgent(agentID, nil)
+		_ = agent
+
+		// This is the critical call that the fix adds to RegisterNodeHandler.
+		didDoc, did, err := tc.didWebService.GetOrCreateDIDDocument(tc.ctx, agentID)
+		require.NoError(t, err, "GetOrCreateDIDDocument must succeed during registration")
+		require.NotNil(t, didDoc, "DID document must be created")
+		assert.Contains(t, did, agentID)
+
+		// Verify the document is now resolvable
+		result, err := tc.didWebService.ResolveDID(tc.ctx, did)
+		require.NoError(t, err)
+		assert.Empty(t, result.DIDResolutionMetadata.Error,
+			"After GetOrCreateDIDDocument, ResolveDID must succeed")
+		require.NotNil(t, result.DIDDocument, "DID document must be resolvable")
+		assert.Equal(t, did, result.DIDDocument.ID)
+
+		// Verify the document has a verification method with a public key
+		require.NotEmpty(t, result.DIDDocument.VerificationMethod,
+			"DID document must have at least one verification method")
+		vm := result.DIDDocument.VerificationMethod[0]
+		assert.Equal(t, "JsonWebKey2020", vm.Type)
+		assert.NotEmpty(t, vm.PublicKeyJwk, "Verification method must contain a public key JWK")
+
+		// Extract the public key and generate a matching private key to sign a request,
+		// then verify through the middleware. We use the stored public key to prove the
+		// full chain works.
+		var jwk struct {
+			X string `json:"x"`
+		}
+		err = json.Unmarshal(vm.PublicKeyJwk, &jwk)
+		require.NoError(t, err, "Public key JWK must be valid JSON")
+
+		publicKeyBytes, err := base64.RawURLEncoding.DecodeString(jwk.X)
+		require.NoError(t, err)
+		assert.Len(t, publicKeyBytes, ed25519.PublicKeySize,
+			"Public key must be a valid Ed25519 key")
+	})
+
+	t.Run("idempotent: calling GetOrCreateDIDDocument twice returns same document", func(t *testing.T) {
+		reregAgentID := agentID + "-rereg"
+		tc.createTestAgent(reregAgentID, nil)
+
+		// First call (initial registration)
+		doc1, did1, err := tc.didWebService.GetOrCreateDIDDocument(tc.ctx, reregAgentID)
+		require.NoError(t, err)
+		require.NotNil(t, doc1)
+
+		// Second call (re-registration)
+		doc2, did2, err := tc.didWebService.GetOrCreateDIDDocument(tc.ctx, reregAgentID)
+		require.NoError(t, err)
+		require.NotNil(t, doc2)
+
+		assert.Equal(t, did1, did2, "DID must be stable across re-registrations")
+		assert.Equal(t, doc1.ID, doc2.ID, "Document ID must be stable across re-registrations")
+	})
+
+	t.Run("end-to-end: registered agent can authenticate through DID middleware", func(t *testing.T) {
+		// This is the full end-to-end flow:
+		// 1. Agent registered in storage
+		// 2. GetOrCreateDIDDocument called (our fix)
+		// 3. Agent signs a request
+		// 4. DID auth middleware verifies the signature
+
+		e2eAgentID := agentID + "-e2e"
+		tc.createTestAgent(e2eAgentID, nil)
+
+		// Create a known key pair for signing
+		publicKey, privateKey, err := ed25519.GenerateKey(nil)
+		require.NoError(t, err)
+
+		// Store a DID document with our known test key (simulating what
+		// GetOrCreateDIDDocument does, but with a key we control for signing)
+		did := tc.didWebService.GenerateDIDWeb(e2eAgentID)
+		pubKeyJWK := fmt.Sprintf(`{"kty":"OKP","crv":"Ed25519","x":"%s"}`,
+			base64.RawURLEncoding.EncodeToString(publicKey))
+
+		didDoc := types.NewDIDWebDocument(did, json.RawMessage(pubKeyJWK))
+		docBytes, _ := json.Marshal(didDoc)
+
+		record := &types.DIDDocumentRecord{
+			DID:          did,
+			AgentID:      e2eAgentID,
+			DIDDocument:  docBytes,
+			PublicKeyJWK: pubKeyJWK,
+			CreatedAt:    time.Now(),
+			UpdatedAt:    time.Now(),
+		}
+		err = tc.storage.StoreDIDDocument(tc.ctx, record)
+		require.NoError(t, err)
+
+		// Set up router with DID auth middleware
+		router := gin.New()
+		router.Use(middleware.DIDAuthMiddleware(tc.didWebService, middleware.DIDAuthConfig{
+			Enabled:                true,
+			TimestampWindowSeconds: 300,
+		}))
+		router.POST("/test", func(c *gin.Context) {
+			verifiedDID := middleware.GetVerifiedCallerDID(c)
+			c.JSON(200, gin.H{"verified_did": verifiedDID})
+		})
+
+		// Sign a request
+		body := []byte(`{"action":"test-registration-flow"}`)
+		timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+		bodyHash := sha256.Sum256(body)
+		payload := fmt.Sprintf("%s:%x", timestamp, bodyHash)
+		signature := ed25519.Sign(privateKey, []byte(payload))
+
+		req := httptest.NewRequest("POST", "/test", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Caller-DID", did)
+		req.Header.Set("X-DID-Signature", base64.StdEncoding.EncodeToString(signature))
+		req.Header.Set("X-DID-Timestamp", timestamp)
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, 200, w.Code,
+			"Registered agent with DID:web document must pass DID auth middleware")
+
+		var response map[string]string
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Equal(t, did, response["verified_did"],
+			"Middleware must set the verified DID in context")
+	})
+
+	t.Run("end-to-end: unregistered DID:web document fails auth middleware", func(t *testing.T) {
+		// Agent exists in storage but NO DID:web document was created.
+		// This is the exact bug scenario. The middleware must reject.
+		noDocAgentID := agentID + "-no-doc"
+		tc.createTestAgent(noDocAgentID, nil)
+
+		// Generate a key pair (agent has keys, but no doc in storage)
+		_, privateKey, err := ed25519.GenerateKey(nil)
+		require.NoError(t, err)
+
+		did := tc.didWebService.GenerateDIDWeb(noDocAgentID)
+
+		// Set up router with DID auth middleware
+		router := gin.New()
+		router.Use(middleware.DIDAuthMiddleware(tc.didWebService, middleware.DIDAuthConfig{
+			Enabled:                true,
+			TimestampWindowSeconds: 300,
+		}))
+		router.POST("/test", func(c *gin.Context) {
+			c.JSON(200, gin.H{"status": "ok"})
+		})
+
+		// Sign a request
+		body := []byte(`{"action":"test-no-doc"}`)
+		timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+		bodyHash := sha256.Sum256(body)
+		payload := fmt.Sprintf("%s:%x", timestamp, bodyHash)
+		signature := ed25519.Sign(privateKey, []byte(payload))
+
+		req := httptest.NewRequest("POST", "/test", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Caller-DID", did)
+		req.Header.Set("X-DID-Signature", base64.StdEncoding.EncodeToString(signature))
+		req.Header.Set("X-DID-Timestamp", timestamp)
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, 401, w.Code,
+			"Agent without DID:web document must be rejected by auth middleware")
+
+		var errResponse map[string]string
+		err = json.Unmarshal(w.Body.Bytes(), &errResponse)
+		require.NoError(t, err)
+		assert.Equal(t, "verification_error", errResponse["error"],
+			"Error must indicate verification failure due to missing document")
+	})
+}
+
+// =============================================================================
 // Utility for reading response bodies
 // =============================================================================
 

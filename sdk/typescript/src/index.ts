@@ -9,6 +9,7 @@ export * from './memory/MemoryInterface.js';
 export * from './memory/MemoryClient.js';
 export * from './memory/MemoryEventClient.js';
 export * from './workflow/WorkflowReporter.js';
+export * from './client/DIDAuthenticator.js';
 export * from './did/DidClient.js';
 export * from './did/DidInterface.js';
 export * from './did/DidManager.js';

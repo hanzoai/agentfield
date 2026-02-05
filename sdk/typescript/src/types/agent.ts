@@ -21,6 +21,8 @@ export interface AgentConfig {
   heartbeatIntervalMs?: number;
   defaultHeaders?: Record<string, string | number | boolean | undefined>;
   apiKey?: string;
+  did?: string;
+  privateKeyJwk?: string;
   mcp?: MCPConfig;
   deploymentType?: DeploymentType;
 }

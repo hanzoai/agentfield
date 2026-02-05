@@ -9,6 +9,7 @@ import type {
   HealthStatus
 } from '../types/agent.js';
 import { httpAgent, httpsAgent } from '../utils/httpAgents.js';
+import { DIDAuthenticator } from './DIDAuthenticator.js';
 
 export interface ExecutionStatusUpdate {
   status?: string;
@@ -22,6 +23,7 @@ export class AgentFieldClient {
   private readonly http: AxiosInstance;
   private readonly config: AgentConfig;
   private readonly defaultHeaders: Record<string, string>;
+  private didAuthenticator: DIDAuthenticator;
 
   constructor(config: AgentConfig) {
     const baseURL = (config.agentFieldUrl ?? 'http://localhost:8080').replace(/\/$/, '');
@@ -38,21 +40,24 @@ this.http = axios.create({
       mergedHeaders['X-API-Key'] = config.apiKey;
     }
     this.defaultHeaders = this.sanitizeHeaders(mergedHeaders);
+    this.didAuthenticator = new DIDAuthenticator(config.did, config.privateKeyJwk);
   }
 
   async register(payload: any) {
-    await this.http.post('/api/v1/nodes/register', payload, { headers: this.mergeHeaders() });
+    const bodyBytes = Buffer.from(JSON.stringify(payload));
+    const authHeaders = this.didAuthenticator.signRequest(bodyBytes);
+    await this.http.post('/api/v1/nodes/register', payload, { headers: this.mergeHeaders(authHeaders) });
   }
 
   async heartbeat(status: 'starting' | 'ready' | 'degraded' | 'offline' = 'ready'): Promise<HealthStatus> {
     const nodeId = this.config.nodeId;
+    const payload = { status, timestamp: new Date().toISOString() };
+    const bodyBytes = Buffer.from(JSON.stringify(payload));
+    const authHeaders = this.didAuthenticator.signRequest(bodyBytes);
     const res = await this.http.post(
       `/api/v1/nodes/${nodeId}/heartbeat`,
-      {
-        status,
-        timestamp: new Date().toISOString()
-      },
-      { headers: this.mergeHeaders() }
+      payload,
+      { headers: this.mergeHeaders(authHeaders) }
     );
     return res.data as HealthStatus;
   }
@@ -83,12 +88,13 @@ this.http = axios.create({
     if (metadata?.agentNodeDid) headers['X-Agent-Node-DID'] = metadata.agentNodeDid;
     if (metadata?.agentNodeId) headers['X-Agent-Node-ID'] = metadata.agentNodeId;
 
+    const payload = { input };
+    const bodyBytes = Buffer.from(JSON.stringify(payload));
+    const authHeaders = this.didAuthenticator.signRequest(bodyBytes);
     const res = await this.http.post(
       `/api/v1/execute/${target}`,
-      {
-        input
-      },
-      { headers: this.mergeHeaders(headers) }
+      payload,
+      { headers: this.mergeHeaders({ ...headers, ...authHeaders }) }
     );
     return (res.data?.result as T) ?? res.data;
   }
@@ -123,9 +129,11 @@ this.http = axios.create({
       duration_ms: event.durationMs
     };
 
+    const bodyBytes = Buffer.from(JSON.stringify(payload));
+    const authHeaders = this.didAuthenticator.signRequest(bodyBytes);
     const request = this.http
       .post('/api/v1/workflow/executions/events', payload, {
-        headers: this.mergeHeaders(),
+        headers: this.mergeHeaders(authHeaders),
         timeout: this.config.devMode ? 1000 : undefined
       })
       .catch(() => {
@@ -149,7 +157,9 @@ this.http = axios.create({
       progress: update.progress !== undefined ? Math.round(update.progress) : undefined
     };
 
-    await this.http.post(`/api/v1/executions/${executionId}/status`, payload, { headers: this.mergeHeaders() });
+    const bodyBytes = Buffer.from(JSON.stringify(payload));
+    const authHeaders = this.didAuthenticator.signRequest(bodyBytes);
+    await this.http.post(`/api/v1/executions/${executionId}/status`, payload, { headers: this.mergeHeaders(authHeaders) });
   }
 
   async discoverCapabilities(options: DiscoveryOptions = {}): Promise<DiscoveryResult> {
@@ -317,6 +327,18 @@ this.http = axios.create({
     return headers;
   }
 
+  setDIDCredentials(did: string, privateKeyJwk: string): void {
+    this.didAuthenticator.setCredentials(did, privateKeyJwk);
+  }
+
+  get didAuthConfigured(): boolean {
+    return this.didAuthenticator.isConfigured;
+  }
+
+  getDID(): string | undefined {
+    return this.didAuthenticator.did;
+  }
+
   sendNote(message: string, tags: string[], agentNodeId: string, metadata: {
     runId?: string;
     executionId?: string;
@@ -336,9 +358,12 @@ this.http = axios.create({
     };
 
     const executionHeaders = this.buildExecutionHeaders({ ...metadata, agentNodeId });
+    const bodyBytes = Buffer.from(JSON.stringify(payload));
+    const authHeaders = this.didAuthenticator.signRequest(bodyBytes);
     const headers = this.mergeHeaders({
       'content-type': 'application/json',
-      ...executionHeaders
+      ...executionHeaders,
+      ...authHeaders
     });
 
     const request = axios
