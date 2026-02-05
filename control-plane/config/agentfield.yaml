@@ -71,3 +71,20 @@ features:
       encryption: "AES-256-GCM"
       backup_enabled: true
       backup_interval: "24h"
+    authorization:
+      enabled: true
+      did_auth_enabled: true
+      domain: "localhost:8080"
+      timestamp_window_seconds: 300
+      default_approval_duration_hours: 24
+      auto_request_on_deny: true
+      protected_agents:
+        - pattern_type: "tag"
+          pattern: "sensitive"
+          description: "Agents tagged sensitive require permission"
+        - pattern_type: "agent_id"
+          pattern: "payment-gateway"
+          description: "Payment gateway requires explicit permission"
+        - pattern_type: "agent_id"
+          pattern: "permission-agent-b"
+          description: "Test protected agent for permission testing"
