@@ -1,6 +1,6 @@
 # VC-Based Authorization Architecture
 
-**Version:** 1.0
+**Version:** 1.1
 **Status:** Implementation
 **Date:** February 2026
 
@@ -8,11 +8,14 @@
 
 ## Executive Summary
 
-This document describes the Verifiable Credential (VC) based authorization system for AgentField. This system replaces the traditional API key distribution model with a self-service permission request and admin approval workflow.
+This document describes the Verifiable Credential (VC) based authorization system for AgentField. This system provides a self-service permission request and admin approval workflow for controlling inter-agent communication.
 
 **Key Principles:**
-- Agents self-assign tags (identity declaration, no approval needed)
+- Agents self-assign tags (identity only, no approval needed)
+- Protected agents are defined via config file (pattern-based rules)
+- Agents declare dependencies at registration → creates permission requests proactively
 - Calling protected agents requires admin approval via UI
+- Admin can revoke permissions at any time
 - Control plane issues signed PermissionVCs upon approval
 - `did:web` enables real-time revocation
 - Control plane is source of truth; nodes cache VCs in memory
@@ -21,59 +24,121 @@ This document describes the Verifiable Credential (VC) based authorization syste
 
 ## System Overview
 
-### Flow Diagram
+### Flow 1: Registration with Dependencies
+
+When an agent registers, it declares the tags of agents it intends to call. This creates permission requests proactively, before the first call attempt.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                           VC AUTHORIZATION FLOW                             │
+│                     REGISTRATION WITH DEPENDENCIES                          │
 └─────────────────────────────────────────────────────────────────────────────┘
 
   AGENT A                     CONTROL PLANE                         ADMIN
   (caller)
      │                              │                                  │
-     │  1. Register with tags       │                                  │
+     │  1. Register                 │                                  │
      │  ─────────────────────────►  │                                  │
-     │  tags: ["marketing"]         │                                  │
+     │  {                           │                                  │
+     │    tags: ["marketing"],      │   (agent's own identity)        │
+     │    dependencies: ["admin",   │   (tags A intends to call)      │
+     │                   "finance"] │                                  │
+     │  }                           │                                  │
      │                              │                                  │
-     │  2. Receives did:web         │                                  │
+     │                              │  2. Check each dependency:       │
+     │                              │     - "admin" → protected?  YES  │
+     │                              │     - "finance" → protected? YES │
+     │                              │                                  │
+     │                              │  3. Create pending requests      │
+     │                              │     for each protected tag       │
+     │                              │                                  │
+     │  4. Receives did:web         │                                  │
      │  ◄─────────────────────────  │                                  │
-     │  did:web:example.com:        │                                  │
-     │    agents:agent-a            │                                  │
+     │  + warning: 2 permissions    │                                  │
+     │    pending                   │                                  │
      │                              │                                  │
-     │  3. Try to call Agent B      │                                  │
+     │                              │  5. Show in Admin UI             │
+     │                              │  ─────────────────────────────►  │
+     │                              │  "agent-a needs: admin, finance" │
+     │                              │                                  │
+     │                              │                   6. Bulk review │
+     │                              │                   [Approve all]  │
+     │                              │  ◄─────────────────────────────  │
+```
+
+**Note:** The agent's own tags (`tags: ["marketing"]`) are stored for reference but don't trigger any special processing. They help admins understand what kind of agent is requesting access.
+
+### Flow 2: Runtime Permission Check
+
+When an agent calls another agent at runtime, the control plane checks permissions. If no approval exists, it creates a request and rejects the call.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        RUNTIME PERMISSION CHECK                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  AGENT A                     CONTROL PLANE                         ADMIN
+  (caller)
+     │                              │                                  │
+     │  1. Call Agent B             │                                  │
      │     (protected agent)        │                                  │
      │  ─────────────────────────►  │                                  │
      │                              │                                  │
-     │                              │  4. Check: Is B protected?       │
+     │                              │  2. Is B protected?              │
      │                              │     YES (tag: "admin")           │
      │                              │                                  │
-     │                              │  5. Check: Has approval?         │
-     │                              │     NO                           │
+     │                              │  3. Has A→B approval?            │
      │                              │                                  │
-     │                              │  6. Auto-create request          │
+     ├──────────────────────────────┼──────────────────────────────────┤
+     │           IF NO APPROVAL     │                                  │
+     ├──────────────────────────────┼──────────────────────────────────┤
      │                              │                                  │
-     │  7. Error: Permission        │                                  │
-     │     required                 │                                  │
+     │                              │  4. Create pending request       │
+     │                              │     (if not exists)              │
+     │                              │                                  │
+     │  5. Error: Permission        │                                  │
+     │     required, request        │                                  │
+     │     pending                  │                                  │
      │  ◄─────────────────────────  │                                  │
      │                              │                                  │
-     │                              │  8. Show in Admin UI             │
+     │                              │  6. Show in Admin UI             │
      │                              │  ─────────────────────────────►  │
-     │                              │  "agent-a wants to call agent-b" │
      │                              │                                  │
-     │                              │                        9. Review │
-     │                              │                   [Approve 30d]  │
+     ├──────────────────────────────┼──────────────────────────────────┤
+     │          IF APPROVED         │                                  │
+     ├──────────────────────────────┼──────────────────────────────────┤
+     │                              │                                  │
+     │                              │  4. Approval valid               │
+     │                              │     (not expired, not revoked)   │
+     │                              │                                  │
+     │  5. Call proceeds            │                                  │
+     │  ◄─────────────────────────  │                                  │
+     │                              │                                  │
+```
+
+### Flow 3: Revocation
+
+Admin can revoke permissions at any time. Next call will fail.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              REVOCATION                                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  AGENT A                     CONTROL PLANE                         ADMIN
+     │                              │                                  │
+     │                              │             1. Revoke A→B        │
      │                              │  ◄─────────────────────────────  │
      │                              │                                  │
-     │                              │  10. Store approval              │
-     │                              │      Issue PermissionVC          │
+     │                              │  2. Mark approval as "revoked"   │
+     │                              │     Set revoked_at timestamp     │
      │                              │                                  │
-     │  11. Retry call to B         │                                  │
+     │  3. Call Agent B             │                                  │
      │  ─────────────────────────►  │                                  │
      │                              │                                  │
-     │                              │  12. Check: Has approval?        │
-     │                              │      YES - return VC             │
+     │                              │  4. Check approval → REVOKED     │
      │                              │                                  │
-     │  13. Call succeeds           │                                  │
+     │  5. Error: Permission        │                                  │
+     │     revoked                  │                                  │
      │  ◄─────────────────────────  │                                  │
 ```
 
@@ -83,13 +148,13 @@ This document describes the Verifiable Credential (VC) based authorization syste
 
 ### 1. Agent Identity (Tags)
 
-Agents declare their identity through self-assigned tags. **No approval is needed for tag assignment.**
+Agents declare their identity through self-assigned tags. **No approval is needed for tag assignment.** Tags are informational only - they help admins understand what kind of agent is requesting access.
 
 ```python
 # Python SDK
 app = Agent(
     node_id="finance-bot",
-    tags=["finance", "reporting"]  # Self-declared identity
+    tags=["finance", "reporting"]  # Self-declared identity (informational)
 )
 
 @app.skill(tags=["pci-compliant"])  # Additional skill-level tags
@@ -101,28 +166,68 @@ Tags serve as:
 - **Identity declaration** - "I am a finance agent"
 - **Capability advertisement** - "I handle PCI-compliant operations"
 - **Discovery metadata** - Other agents can find me by tags
+- **Admin context** - Helps admin decide whether to approve permission requests
 
-### 2. Protected Agents
+**Important:** The system does NOT auto-enforce based on caller tags. Tags don't grant or restrict permissions - they're purely informational for admin review.
 
-Admins configure which agents require permission to call via pattern rules:
+### 2. Dependency Declaration
+
+Agents declare the tags of agents they intend to call at registration. This creates permission requests proactively.
+
+```python
+# Python SDK
+app = Agent(
+    node_id="reporting-bot",
+    tags=["reporting"],           # My identity
+    dependencies=["finance", "admin"]  # Tags I need to call
+)
+```
+
+When `reporting-bot` registers:
+1. Control plane checks if `finance` or `admin` are protected tags
+2. For each protected tag, creates a pending permission request
+3. Admin can pre-approve before the agent even tries to call
+
+This enables:
+- **Proactive approval** - Requests created before first call
+- **Bulk approval** - Admin can approve multiple dependencies at once
+- **Visibility** - See all required permissions for an agent upfront
+
+### 3. Protected Agents
+
+Protected agents are defined via **config file**. These rules determine which agents require permission to call.
 
 ```yaml
+# agentfield.yaml
 permissions:
+  enabled: true
   protected_agents:
+    # By exact tag
     - pattern_type: tag
       pattern: admin
       description: "Agents with admin tag require permission"
 
+    # By tag pattern (wildcard)
     - pattern_type: tag_pattern
       pattern: "finance*"
       description: "All finance-related agents require permission"
 
+    # By specific agent ID
     - pattern_type: agent_id
       pattern: "payment-gateway"
       description: "Specific agent requires permission"
 ```
 
-### 3. Permission Approval
+Rules can also be added via Admin UI (stored in database), but config file is the primary source.
+
+**Pattern Types:**
+| Type | Example | Matches |
+|------|---------|---------|
+| `tag` | `admin` | Agents with exact tag "admin" |
+| `tag_pattern` | `finance*` | Agents with tags starting with "finance" |
+| `agent_id` | `payment-gateway` | Specific agent by ID |
+
+### 4. Permission Approval
 
 When Agent A tries to call protected Agent B:
 
@@ -133,7 +238,13 @@ When Agent A tries to call protected Agent B:
 5. Upon approval, control plane stores approval record
 6. Future calls from A to B succeed (same DID pair)
 
-### 4. Verifiable Credentials (VCs)
+**Revocation:** Admin can revoke permissions at any time. When revoked:
+- The approval status changes to "revoked"
+- A `revoked_at` timestamp is recorded
+- All subsequent calls are rejected
+- Agent must request permission again (new approval needed)
+
+### 5. Verifiable Credentials (VCs)
 
 Upon approval, the system can issue a PermissionVC - a cryptographically signed proof of the approval:
 
@@ -159,7 +270,7 @@ Upon approval, the system can issue a PermissionVC - a cryptographically signed 
 }
 ```
 
-### 5. DID Methods
+### 6. DID Methods
 
 #### did:key (Current - Limited)
 - DID derived from public key: `did:key:z6MkpTHR8VNs...`
@@ -222,8 +333,9 @@ Upon approval, the system can issue a PermissionVC - a cryptographically signed 
 ┌─────────────────────────────────────────────────────────────────┐
 │  AGENT BOUNDARY: Self-Declared Identity                         │
 │                                                                 │
-│  - Agents assign their own tags (no approval)                  │
+│  - Agents assign their own tags (informational, no approval)   │
 │  - Tags = identity, NOT permissions                            │
+│  - Agents declare dependencies (tags they intend to call)      │
 │  - Agents cannot grant themselves access to protected agents   │
 │  - Must request and wait for admin approval                    │
 └─────────────────────────────────────────────────────────────────┘
@@ -233,9 +345,49 @@ Upon approval, the system can issue a PermissionVC - a cryptographically signed 
 
 ## API Contracts
 
+### Agent Registration (with Dependencies)
+
+When an agent registers, it can declare dependencies - tags of agents it intends to call.
+
+```http
+POST /api/v1/agents/register
+Content-Type: application/json
+
+{
+  "agent_id": "reporting-bot",
+  "tags": ["reporting", "analytics"],     // Agent's own identity (informational)
+  "dependencies": ["finance", "admin"]    // Tags this agent needs to call
+}
+
+Response 200:
+{
+  "agent_id": "reporting-bot",
+  "did": "did:web:example.com:agents:reporting-bot",
+  "tags": ["reporting", "analytics"],
+  "pending_permissions": [
+    {
+      "target_tag": "finance",
+      "status": "pending",
+      "request_id": 124
+    },
+    {
+      "target_tag": "admin",
+      "status": "pending",
+      "request_id": 125
+    }
+  ]
+}
+```
+
+The control plane:
+1. Creates a did:web for the agent
+2. Stores agent's tags (informational)
+3. For each dependency that matches a protected agent rule, creates a pending permission request
+4. Returns list of pending permissions so agent knows what's awaiting approval
+
 ### Permission Request Flow
 
-#### Request Permission
+#### Request Permission (Manual)
 ```http
 POST /api/v1/permissions/request
 Content-Type: application/json
@@ -372,6 +524,17 @@ Response 404 (revoked):
 ---
 
 ## Configuration
+
+### What Goes Where
+
+| Data | Source | Purpose |
+|------|--------|---------|
+| **Protected agent rules** | Config file (primary) | Defines which agents require permission |
+| **Protected agent rules** | Database (secondary) | Rules added via Admin UI |
+| **Permission approvals** | Database | Tracks caller→target approval status |
+| **DID documents** | Database | Stores did:web documents for resolution |
+| **Agent tags** | Agent registration | Self-declared identity (informational) |
+| **Agent dependencies** | Agent registration | Tags the agent intends to call |
 
 ### Full Configuration Example
 

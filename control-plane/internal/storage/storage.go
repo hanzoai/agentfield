@@ -188,6 +188,26 @@ type StorageProvider interface {
 	GetDeadLetterQueue(ctx context.Context, limit, offset int) ([]types.ObservabilityDeadLetterEntry, error)
 	DeleteFromDeadLetterQueue(ctx context.Context, ids []int64) error
 	ClearDeadLetterQueue(ctx context.Context) error
+
+	// Permission approval operations (VC-based authorization)
+	CreatePermissionApproval(ctx context.Context, approval *types.PermissionApproval) error
+	GetPermissionApproval(ctx context.Context, callerDID, targetDID string) (*types.PermissionApproval, error)
+	GetPermissionApprovalByID(ctx context.Context, id int64) (*types.PermissionApproval, error)
+	UpdatePermissionApproval(ctx context.Context, approval *types.PermissionApproval) error
+	ListPermissionApprovals(ctx context.Context, status types.PermissionStatus) ([]*types.PermissionApproval, error)
+	ListAllPermissionApprovals(ctx context.Context) ([]*types.PermissionApproval, error)
+
+	// Protected agent rule operations (VC-based authorization)
+	GetProtectedAgentRules(ctx context.Context) ([]*types.ProtectedAgentRule, error)
+	CreateProtectedAgentRule(ctx context.Context, rule *types.ProtectedAgentRule) error
+	DeleteProtectedAgentRule(ctx context.Context, id int64) error
+
+	// DID Document operations (did:web resolution)
+	StoreDIDDocument(ctx context.Context, record *types.DIDDocumentRecord) error
+	GetDIDDocument(ctx context.Context, did string) (*types.DIDDocumentRecord, error)
+	GetDIDDocumentByAgentID(ctx context.Context, agentID string) (*types.DIDDocumentRecord, error)
+	RevokeDIDDocument(ctx context.Context, did string) error
+	ListDIDDocuments(ctx context.Context) ([]*types.DIDDocumentRecord, error)
 }
 
 // ComponentDIDRequest represents a component DID to be stored

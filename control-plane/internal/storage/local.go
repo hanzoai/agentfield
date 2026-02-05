@@ -7331,3 +7331,603 @@ func (ls *LocalStorage) ListExecutionWebhookEventsBatch(ctx context.Context, exe
 
 	return results, nil
 }
+
+// =============================================================================
+// Permission Approval Operations (VC-based Authorization)
+// =============================================================================
+
+// CreatePermissionApproval creates a new permission approval record.
+func (ls *LocalStorage) CreatePermissionApproval(ctx context.Context, approval *types.PermissionApproval) error {
+	if ls.mode == "postgres" {
+		return ls.createPermissionApprovalPostgres(ctx, approval)
+	}
+
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during create permission approval: %w", err)
+	}
+
+	query := `
+		INSERT INTO permission_approvals (
+			caller_did, target_did, caller_agent_id, target_agent_id,
+			status, approved_by, approved_at, rejected_by, rejected_at,
+			revoked_by, revoked_at, expires_at, reason, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+	result, err := ls.db.ExecContext(ctx, query,
+		approval.CallerDID, approval.TargetDID, approval.CallerAgentID, approval.TargetAgentID,
+		approval.Status, approval.ApprovedBy, approval.ApprovedAt, approval.RejectedBy, approval.RejectedAt,
+		approval.RevokedBy, approval.RevokedAt, approval.ExpiresAt, approval.Reason,
+		approval.CreatedAt, approval.UpdatedAt,
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint") || strings.Contains(err.Error(), "unique_caller_target") {
+			return fmt.Errorf("permission approval already exists for caller %s to target %s", approval.CallerDID, approval.TargetDID)
+		}
+		return fmt.Errorf("failed to create permission approval: %w", err)
+	}
+
+	id, err := result.LastInsertId()
+	if err == nil {
+		approval.ID = id
+	}
+
+	return nil
+}
+
+// createPermissionApprovalPostgres creates a permission approval using PostgreSQL's RETURNING clause.
+func (ls *LocalStorage) createPermissionApprovalPostgres(ctx context.Context, approval *types.PermissionApproval) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during create permission approval: %w", err)
+	}
+
+	query := `
+		INSERT INTO permission_approvals (
+			caller_did, target_did, caller_agent_id, target_agent_id,
+			status, approved_by, approved_at, rejected_by, rejected_at,
+			revoked_by, revoked_at, expires_at, reason, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		RETURNING id`
+
+	row := ls.db.DB.QueryRowContext(ctx, query,
+		approval.CallerDID, approval.TargetDID, approval.CallerAgentID, approval.TargetAgentID,
+		approval.Status, approval.ApprovedBy, approval.ApprovedAt, approval.RejectedBy, approval.RejectedAt,
+		approval.RevokedBy, approval.RevokedAt, approval.ExpiresAt, approval.Reason,
+		approval.CreatedAt, approval.UpdatedAt,
+	)
+
+	if err := row.Scan(&approval.ID); err != nil {
+		if strings.Contains(err.Error(), "unique_caller_target") || strings.Contains(err.Error(), "duplicate key") {
+			return fmt.Errorf("permission approval already exists for caller %s to target %s", approval.CallerDID, approval.TargetDID)
+		}
+		return fmt.Errorf("failed to create permission approval: %w", err)
+	}
+
+	return nil
+}
+
+// GetPermissionApproval retrieves a permission approval by caller and target DIDs.
+func (ls *LocalStorage) GetPermissionApproval(ctx context.Context, callerDID, targetDID string) (*types.PermissionApproval, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context cancelled during get permission approval: %w", err)
+	}
+
+	query := `
+		SELECT id, caller_did, target_did, caller_agent_id, target_agent_id,
+			   status, approved_by, approved_at, rejected_by, rejected_at,
+			   revoked_by, revoked_at, expires_at, reason, created_at, updated_at
+		FROM permission_approvals WHERE caller_did = ? AND target_did = ?`
+
+	row := ls.db.QueryRowContext(ctx, query, callerDID, targetDID)
+	return scanPermissionApproval(row)
+}
+
+// GetPermissionApprovalByID retrieves a permission approval by its ID.
+func (ls *LocalStorage) GetPermissionApprovalByID(ctx context.Context, id int64) (*types.PermissionApproval, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context cancelled during get permission approval by ID: %w", err)
+	}
+
+	query := `
+		SELECT id, caller_did, target_did, caller_agent_id, target_agent_id,
+			   status, approved_by, approved_at, rejected_by, rejected_at,
+			   revoked_by, revoked_at, expires_at, reason, created_at, updated_at
+		FROM permission_approvals WHERE id = ?`
+
+	row := ls.db.QueryRowContext(ctx, query, id)
+	return scanPermissionApproval(row)
+}
+
+// UpdatePermissionApproval updates an existing permission approval.
+func (ls *LocalStorage) UpdatePermissionApproval(ctx context.Context, approval *types.PermissionApproval) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during update permission approval: %w", err)
+	}
+
+	query := `
+		UPDATE permission_approvals SET
+			status = ?, approved_by = ?, approved_at = ?,
+			rejected_by = ?, rejected_at = ?, revoked_by = ?, revoked_at = ?,
+			expires_at = ?, reason = ?, updated_at = ?
+		WHERE id = ?`
+
+	result, err := ls.db.ExecContext(ctx, query,
+		approval.Status, approval.ApprovedBy, approval.ApprovedAt,
+		approval.RejectedBy, approval.RejectedAt, approval.RevokedBy, approval.RevokedAt,
+		approval.ExpiresAt, approval.Reason, approval.UpdatedAt,
+		approval.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update permission approval: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("permission approval with ID %d not found", approval.ID)
+	}
+
+	return nil
+}
+
+// ListPermissionApprovals lists all permission approvals with the given status.
+func (ls *LocalStorage) ListPermissionApprovals(ctx context.Context, status types.PermissionStatus) ([]*types.PermissionApproval, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context cancelled during list permission approvals: %w", err)
+	}
+
+	query := `
+		SELECT id, caller_did, target_did, caller_agent_id, target_agent_id,
+			   status, approved_by, approved_at, rejected_by, rejected_at,
+			   revoked_by, revoked_at, expires_at, reason, created_at, updated_at
+		FROM permission_approvals WHERE status = ? ORDER BY created_at DESC`
+
+	rows, err := ls.db.QueryContext(ctx, query, status)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list permission approvals: %w", err)
+	}
+	defer rows.Close()
+
+	return scanPermissionApprovals(ctx, rows)
+}
+
+// ListAllPermissionApprovals lists all permission approvals regardless of status.
+func (ls *LocalStorage) ListAllPermissionApprovals(ctx context.Context) ([]*types.PermissionApproval, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context cancelled during list all permission approvals: %w", err)
+	}
+
+	query := `
+		SELECT id, caller_did, target_did, caller_agent_id, target_agent_id,
+			   status, approved_by, approved_at, rejected_by, rejected_at,
+			   revoked_by, revoked_at, expires_at, reason, created_at, updated_at
+		FROM permission_approvals ORDER BY created_at DESC`
+
+	rows, err := ls.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list all permission approvals: %w", err)
+	}
+	defer rows.Close()
+
+	return scanPermissionApprovals(ctx, rows)
+}
+
+// scanPermissionApproval scans a single row into a PermissionApproval.
+func scanPermissionApproval(row *sql.Row) (*types.PermissionApproval, error) {
+	approval := &types.PermissionApproval{}
+	var status string
+	var approvedBy, rejectedBy, revokedBy, reason sql.NullString
+	var approvedAt, rejectedAt, revokedAt, expiresAt sql.NullTime
+
+	err := row.Scan(
+		&approval.ID, &approval.CallerDID, &approval.TargetDID,
+		&approval.CallerAgentID, &approval.TargetAgentID,
+		&status, &approvedBy, &approvedAt, &rejectedBy, &rejectedAt,
+		&revokedBy, &revokedAt, &expiresAt, &reason,
+		&approval.CreatedAt, &approval.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("permission approval not found")
+		}
+		return nil, fmt.Errorf("failed to scan permission approval: %w", err)
+	}
+
+	approval.Status = types.PermissionStatus(status)
+	if approvedBy.Valid {
+		approval.ApprovedBy = &approvedBy.String
+	}
+	if approvedAt.Valid {
+		approval.ApprovedAt = &approvedAt.Time
+	}
+	if rejectedBy.Valid {
+		approval.RejectedBy = &rejectedBy.String
+	}
+	if rejectedAt.Valid {
+		approval.RejectedAt = &rejectedAt.Time
+	}
+	if revokedBy.Valid {
+		approval.RevokedBy = &revokedBy.String
+	}
+	if revokedAt.Valid {
+		approval.RevokedAt = &revokedAt.Time
+	}
+	if expiresAt.Valid {
+		approval.ExpiresAt = &expiresAt.Time
+	}
+	if reason.Valid {
+		approval.Reason = &reason.String
+	}
+
+	return approval, nil
+}
+
+// scanPermissionApprovals scans multiple rows into a slice of PermissionApprovals.
+func scanPermissionApprovals(ctx context.Context, rows *sql.Rows) ([]*types.PermissionApproval, error) {
+	var approvals []*types.PermissionApproval
+
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("context cancelled during scan: %w", err)
+		}
+
+		approval := &types.PermissionApproval{}
+		var status string
+		var approvedBy, rejectedBy, revokedBy, reason sql.NullString
+		var approvedAt, rejectedAt, revokedAt, expiresAt sql.NullTime
+
+		err := rows.Scan(
+			&approval.ID, &approval.CallerDID, &approval.TargetDID,
+			&approval.CallerAgentID, &approval.TargetAgentID,
+			&status, &approvedBy, &approvedAt, &rejectedBy, &rejectedAt,
+			&revokedBy, &revokedAt, &expiresAt, &reason,
+			&approval.CreatedAt, &approval.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan permission approval: %w", err)
+		}
+
+		approval.Status = types.PermissionStatus(status)
+		if approvedBy.Valid {
+			approval.ApprovedBy = &approvedBy.String
+		}
+		if approvedAt.Valid {
+			approval.ApprovedAt = &approvedAt.Time
+		}
+		if rejectedBy.Valid {
+			approval.RejectedBy = &rejectedBy.String
+		}
+		if rejectedAt.Valid {
+			approval.RejectedAt = &rejectedAt.Time
+		}
+		if revokedBy.Valid {
+			approval.RevokedBy = &revokedBy.String
+		}
+		if revokedAt.Valid {
+			approval.RevokedAt = &revokedAt.Time
+		}
+		if expiresAt.Valid {
+			approval.ExpiresAt = &expiresAt.Time
+		}
+		if reason.Valid {
+			approval.Reason = &reason.String
+		}
+
+		approvals = append(approvals, approval)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating permission approvals: %w", err)
+	}
+
+	return approvals, nil
+}
+
+// =============================================================================
+// Protected Agent Rule Operations (VC-based Authorization)
+// =============================================================================
+
+// GetProtectedAgentRules retrieves all enabled protected agent rules.
+func (ls *LocalStorage) GetProtectedAgentRules(ctx context.Context) ([]*types.ProtectedAgentRule, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context cancelled during get protected agent rules: %w", err)
+	}
+
+	query := `
+		SELECT id, pattern_type, pattern, description, enabled, created_at, updated_at
+		FROM protected_agents_config WHERE enabled = true ORDER BY created_at DESC`
+
+	rows, err := ls.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get protected agent rules: %w", err)
+	}
+	defer rows.Close()
+
+	var rules []*types.ProtectedAgentRule
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("context cancelled during scan: %w", err)
+		}
+
+		rule := &types.ProtectedAgentRule{}
+		var description sql.NullString
+		var patternType string
+
+		err := rows.Scan(
+			&rule.ID, &patternType, &rule.Pattern, &description,
+			&rule.Enabled, &rule.CreatedAt, &rule.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan protected agent rule: %w", err)
+		}
+
+		rule.PatternType = types.ProtectedAgentPatternType(patternType)
+		if description.Valid {
+			rule.Description = &description.String
+		}
+
+		rules = append(rules, rule)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating protected agent rules: %w", err)
+	}
+
+	return rules, nil
+}
+
+// CreateProtectedAgentRule creates a new protected agent rule.
+func (ls *LocalStorage) CreateProtectedAgentRule(ctx context.Context, rule *types.ProtectedAgentRule) error {
+	if ls.mode == "postgres" {
+		return ls.createProtectedAgentRulePostgres(ctx, rule)
+	}
+
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during create protected agent rule: %w", err)
+	}
+
+	query := `
+		INSERT INTO protected_agents_config (
+			pattern_type, pattern, description, enabled, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?)`
+
+	result, err := ls.db.ExecContext(ctx, query,
+		rule.PatternType, rule.Pattern, rule.Description, rule.Enabled,
+		rule.CreatedAt, rule.UpdatedAt,
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint") || strings.Contains(err.Error(), "unique_pattern") {
+			return fmt.Errorf("protected agent rule with pattern type %s and pattern %s already exists", rule.PatternType, rule.Pattern)
+		}
+		return fmt.Errorf("failed to create protected agent rule: %w", err)
+	}
+
+	id, err := result.LastInsertId()
+	if err == nil {
+		rule.ID = id
+	}
+
+	return nil
+}
+
+// createProtectedAgentRulePostgres creates a protected agent rule using PostgreSQL's RETURNING clause.
+func (ls *LocalStorage) createProtectedAgentRulePostgres(ctx context.Context, rule *types.ProtectedAgentRule) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during create protected agent rule: %w", err)
+	}
+
+	query := `
+		INSERT INTO protected_agents_config (
+			pattern_type, pattern, description, enabled, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id`
+
+	row := ls.db.DB.QueryRowContext(ctx, query,
+		rule.PatternType, rule.Pattern, rule.Description, rule.Enabled,
+		rule.CreatedAt, rule.UpdatedAt,
+	)
+
+	if err := row.Scan(&rule.ID); err != nil {
+		if strings.Contains(err.Error(), "unique_pattern") || strings.Contains(err.Error(), "duplicate key") {
+			return fmt.Errorf("protected agent rule with pattern type %s and pattern %s already exists", rule.PatternType, rule.Pattern)
+		}
+		return fmt.Errorf("failed to create protected agent rule: %w", err)
+	}
+
+	return nil
+}
+
+// DeleteProtectedAgentRule deletes a protected agent rule by ID.
+func (ls *LocalStorage) DeleteProtectedAgentRule(ctx context.Context, id int64) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during delete protected agent rule: %w", err)
+	}
+
+	query := `DELETE FROM protected_agents_config WHERE id = ?`
+
+	result, err := ls.db.ExecContext(ctx, query, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete protected agent rule: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("protected agent rule with ID %d not found", id)
+	}
+
+	return nil
+}
+
+// =============================================================================
+// DID Document Operations (did:web Resolution)
+// =============================================================================
+
+// StoreDIDDocument stores a DID document record.
+func (ls *LocalStorage) StoreDIDDocument(ctx context.Context, record *types.DIDDocumentRecord) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during store DID document: %w", err)
+	}
+
+	query := `
+		INSERT INTO did_documents (
+			did, agent_id, did_document, public_key_jwk, revoked_at, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(did) DO UPDATE SET
+			agent_id = excluded.agent_id,
+			did_document = excluded.did_document,
+			public_key_jwk = excluded.public_key_jwk,
+			updated_at = excluded.updated_at`
+
+	_, err := ls.db.ExecContext(ctx, query,
+		record.DID, record.AgentID, record.DIDDocument, record.PublicKeyJWK,
+		record.RevokedAt, record.CreatedAt, record.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to store DID document: %w", err)
+	}
+
+	return nil
+}
+
+// GetDIDDocument retrieves a DID document by its DID.
+func (ls *LocalStorage) GetDIDDocument(ctx context.Context, did string) (*types.DIDDocumentRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context cancelled during get DID document: %w", err)
+	}
+
+	query := `
+		SELECT did, agent_id, did_document, public_key_jwk, revoked_at, created_at, updated_at
+		FROM did_documents WHERE did = ?`
+
+	row := ls.db.QueryRowContext(ctx, query, did)
+
+	record := &types.DIDDocumentRecord{}
+	var revokedAt sql.NullTime
+
+	err := row.Scan(
+		&record.DID, &record.AgentID, &record.DIDDocument, &record.PublicKeyJWK,
+		&revokedAt, &record.CreatedAt, &record.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("DID document not found: %s", did)
+		}
+		return nil, fmt.Errorf("failed to get DID document: %w", err)
+	}
+
+	if revokedAt.Valid {
+		record.RevokedAt = &revokedAt.Time
+	}
+
+	return record, nil
+}
+
+// GetDIDDocumentByAgentID retrieves a DID document by agent ID.
+func (ls *LocalStorage) GetDIDDocumentByAgentID(ctx context.Context, agentID string) (*types.DIDDocumentRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context cancelled during get DID document by agent ID: %w", err)
+	}
+
+	query := `
+		SELECT did, agent_id, did_document, public_key_jwk, revoked_at, created_at, updated_at
+		FROM did_documents WHERE agent_id = ? AND revoked_at IS NULL
+		ORDER BY created_at DESC LIMIT 1`
+
+	row := ls.db.QueryRowContext(ctx, query, agentID)
+
+	record := &types.DIDDocumentRecord{}
+	var revokedAt sql.NullTime
+
+	err := row.Scan(
+		&record.DID, &record.AgentID, &record.DIDDocument, &record.PublicKeyJWK,
+		&revokedAt, &record.CreatedAt, &record.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("DID document not found for agent: %s", agentID)
+		}
+		return nil, fmt.Errorf("failed to get DID document by agent ID: %w", err)
+	}
+
+	if revokedAt.Valid {
+		record.RevokedAt = &revokedAt.Time
+	}
+
+	return record, nil
+}
+
+// RevokeDIDDocument revokes a DID document by setting its revoked_at timestamp.
+func (ls *LocalStorage) RevokeDIDDocument(ctx context.Context, did string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during revoke DID document: %w", err)
+	}
+
+	query := `UPDATE did_documents SET revoked_at = ?, updated_at = ? WHERE did = ?`
+
+	now := time.Now()
+	result, err := ls.db.ExecContext(ctx, query, now, now, did)
+	if err != nil {
+		return fmt.Errorf("failed to revoke DID document: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("DID document not found: %s", did)
+	}
+
+	return nil
+}
+
+// ListDIDDocuments lists all DID documents.
+func (ls *LocalStorage) ListDIDDocuments(ctx context.Context) ([]*types.DIDDocumentRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context cancelled during list DID documents: %w", err)
+	}
+
+	query := `
+		SELECT did, agent_id, did_document, public_key_jwk, revoked_at, created_at, updated_at
+		FROM did_documents ORDER BY created_at DESC`
+
+	rows, err := ls.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list DID documents: %w", err)
+	}
+	defer rows.Close()
+
+	var records []*types.DIDDocumentRecord
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("context cancelled during scan: %w", err)
+		}
+
+		record := &types.DIDDocumentRecord{}
+		var revokedAt sql.NullTime
+
+		err := rows.Scan(
+			&record.DID, &record.AgentID, &record.DIDDocument, &record.PublicKeyJWK,
+			&revokedAt, &record.CreatedAt, &record.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan DID document: %w", err)
+		}
+
+		if revokedAt.Valid {
+			record.RevokedAt = &revokedAt.Time
+		}
+
+		records = append(records, record)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating DID documents: %w", err)
+	}
+
+	return records, nil
+}

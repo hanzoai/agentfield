@@ -56,7 +56,7 @@ jobs:
 
       - name: Run tests
         working-directory: control-plane
-        run: go test ./...
+        run: go test -tags sqlite_fts5 ./...
 
       - name: Lint
         working-directory: control-plane

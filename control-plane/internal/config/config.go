@@ -74,13 +74,42 @@ type FeatureConfig struct {
 
 // DIDConfig holds configuration for DID identity system.
 type DIDConfig struct {
-	Enabled          bool           `yaml:"enabled" mapstructure:"enabled" default:"true"`
-	Method           string         `yaml:"method" mapstructure:"method" default:"did:key"`
-	KeyAlgorithm     string         `yaml:"key_algorithm" mapstructure:"key_algorithm" default:"Ed25519"`
-	DerivationMethod string         `yaml:"derivation_method" mapstructure:"derivation_method" default:"BIP32"`
-	KeyRotationDays  int            `yaml:"key_rotation_days" mapstructure:"key_rotation_days" default:"90"`
-	VCRequirements   VCRequirements `yaml:"vc_requirements" mapstructure:"vc_requirements"`
-	Keystore         KeystoreConfig `yaml:"keystore" mapstructure:"keystore"`
+	Enabled          bool                `yaml:"enabled" mapstructure:"enabled" default:"true"`
+	Method           string              `yaml:"method" mapstructure:"method" default:"did:key"`
+	KeyAlgorithm     string              `yaml:"key_algorithm" mapstructure:"key_algorithm" default:"Ed25519"`
+	DerivationMethod string              `yaml:"derivation_method" mapstructure:"derivation_method" default:"BIP32"`
+	KeyRotationDays  int                 `yaml:"key_rotation_days" mapstructure:"key_rotation_days" default:"90"`
+	VCRequirements   VCRequirements      `yaml:"vc_requirements" mapstructure:"vc_requirements"`
+	Keystore         KeystoreConfig      `yaml:"keystore" mapstructure:"keystore"`
+	Authorization    AuthorizationConfig `yaml:"authorization" mapstructure:"authorization"`
+}
+
+// AuthorizationConfig holds configuration for VC-based authorization.
+type AuthorizationConfig struct {
+	// Enabled determines if the authorization system is active
+	Enabled bool `yaml:"enabled" mapstructure:"enabled" default:"false"`
+	// DIDAuthEnabled enables DID-based authentication on API routes
+	DIDAuthEnabled bool `yaml:"did_auth_enabled" mapstructure:"did_auth_enabled" default:"false"`
+	// Domain is the domain used for did:web identifiers (e.g., "localhost:8080")
+	Domain string `yaml:"domain" mapstructure:"domain" default:"localhost:8080"`
+	// TimestampWindowSeconds is the allowed time drift for DID signature timestamps
+	TimestampWindowSeconds int64 `yaml:"timestamp_window_seconds" mapstructure:"timestamp_window_seconds" default:"300"`
+	// DefaultApprovalDurationHours is the default duration for permission approvals
+	DefaultApprovalDurationHours int `yaml:"default_approval_duration_hours" mapstructure:"default_approval_duration_hours" default:"720"`
+	// AutoRequestOnDeny if true, automatically creates a permission request when access is denied
+	AutoRequestOnDeny bool `yaml:"auto_request_on_deny" mapstructure:"auto_request_on_deny" default:"true"`
+	// ProtectedAgents defines which agents require permission to call (seeded at startup)
+	ProtectedAgents []ProtectedAgentConfig `yaml:"protected_agents" mapstructure:"protected_agents"`
+}
+
+// ProtectedAgentConfig defines a rule for protecting agents.
+type ProtectedAgentConfig struct {
+	// PatternType is the type of pattern: "tag", "tag_pattern", or "agent_id"
+	PatternType string `yaml:"pattern_type" mapstructure:"pattern_type"`
+	// Pattern is the pattern to match against (supports wildcards for tag_pattern)
+	Pattern string `yaml:"pattern" mapstructure:"pattern"`
+	// Description is a human-readable description of why this agent is protected
+	Description string `yaml:"description" mapstructure:"description"`
 }
 
 // VCRequirements holds VC generation requirements.

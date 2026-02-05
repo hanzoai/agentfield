@@ -19,6 +19,7 @@ import (
 	coreservices "github.com/Agent-Field/agentfield/control-plane/internal/core/services" // Core services
 	"github.com/Agent-Field/agentfield/control-plane/internal/events"                     // Event system
 	"github.com/Agent-Field/agentfield/control-plane/internal/handlers"                   // Agent handlers
+	"github.com/Agent-Field/agentfield/control-plane/internal/handlers/admin"             // Admin handlers
 	"github.com/Agent-Field/agentfield/control-plane/internal/handlers/ui"                // UI handlers
 	"github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/communication"
 	"github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/process"
@@ -57,11 +58,13 @@ type AgentFieldServer struct {
 	storageHealthOverride func(context.Context) gin.H
 	cacheHealthOverride   func(context.Context) gin.H
 	// DID Services
-	keystoreService *services.KeystoreService
-	didService      *services.DIDService
-	vcService       *services.VCService
-	didRegistry     *services.DIDRegistry
-	agentfieldHome  string
+	keystoreService   *services.KeystoreService
+	didService        *services.DIDService
+	vcService         *services.VCService
+	didRegistry       *services.DIDRegistry
+	didWebService     *services.DIDWebService
+	permissionService *services.PermissionService
+	agentfieldHome    string
 	// Cleanup service
 	cleanupService        *handlers.ExecutionCleanupService
 	payloadStore          services.PayloadStore
@@ -230,6 +233,69 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		fmt.Println("⚠️ DID and VC services are DISABLED in configuration")
 	}
 
+	// Initialize DIDWebService and PermissionService if DID is enabled
+	var didWebService *services.DIDWebService
+	var permissionService *services.PermissionService
+
+	if cfg.Features.DID.Enabled && didService != nil {
+		// Determine domain for did:web identifiers
+		domain := cfg.Features.DID.Authorization.Domain
+		if domain == "" {
+			domain = fmt.Sprintf("localhost:%d", cfg.AgentField.Port)
+		}
+
+		// Create DIDWebService
+		fmt.Printf("🌐 Creating DID Web service with domain: %s\n", domain)
+		didWebService = services.NewDIDWebService(domain, didService, storageProvider)
+
+		// Create PermissionService if authorization is enabled
+		if cfg.Features.DID.Authorization.Enabled {
+			fmt.Println("🔐 Creating Permission service...")
+			permissionConfig := &services.PermissionConfig{
+				Enabled:              true,
+				DefaultDurationHours: cfg.Features.DID.Authorization.DefaultApprovalDurationHours,
+				AutoRequestOnDeny:    cfg.Features.DID.Authorization.AutoRequestOnDeny,
+			}
+			permissionService = services.NewPermissionService(storageProvider, didWebService, vcService, permissionConfig)
+
+			// Initialize permission service (loads rules from storage)
+			if err := permissionService.Initialize(context.Background()); err != nil {
+				logger.Logger.Warn().Err(err).Msg("Failed to initialize permission service")
+			} else {
+				fmt.Println("✅ Permission service initialized successfully!")
+			}
+
+			// Seed protected agent rules from config file
+			if len(cfg.Features.DID.Authorization.ProtectedAgents) > 0 {
+				ctx := context.Background()
+				seededCount := 0
+				for _, rule := range cfg.Features.DID.Authorization.ProtectedAgents {
+					_, err := permissionService.AddProtectedAgentRule(ctx, &types.ProtectedAgentRuleRequest{
+						PatternType: types.ProtectedAgentPatternType(rule.PatternType),
+						Pattern:     rule.Pattern,
+						Description: rule.Description,
+					})
+					if err != nil {
+						// Log but don't fail - rule might already exist
+						logger.Logger.Debug().
+							Err(err).
+							Str("pattern_type", rule.PatternType).
+							Str("pattern", rule.Pattern).
+							Msg("Failed to seed protected agent rule from config (may already exist)")
+					} else {
+						seededCount++
+					}
+				}
+				if seededCount > 0 {
+					logger.Logger.Info().
+						Int("seeded_count", seededCount).
+						Int("total_config_rules", len(cfg.Features.DID.Authorization.ProtectedAgents)).
+						Msg("Seeded protected agent rules from config")
+				}
+			}
+		}
+	}
+
 	payloadStore := services.NewFilePayloadStore(dirs.PayloadsDir)
 
 	webhookDispatcher := services.NewWebhookDispatcher(storageProvider, services.WebhookDispatcherConfig{
@@ -285,6 +351,8 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		didService:            didService,
 		vcService:             vcService,
 		didRegistry:           didRegistry,
+		didWebService:         didWebService,
+		permissionService:     permissionService,
 		agentfieldHome:        agentfieldHome,
 		cleanupService:        cleanupService,
 		payloadStore:          payloadStore,
@@ -667,6 +735,21 @@ func (s *AgentFieldServer) setupRoutes() {
 		logger.Logger.Info().Msg("🔐 API key authentication enabled")
 	}
 
+	// DID authentication middleware (applied globally, but only validates when headers present)
+	if s.config.Features.DID.Enabled && s.config.Features.DID.Authorization.DIDAuthEnabled && s.didWebService != nil {
+		didAuthConfig := middleware.DIDAuthConfig{
+			Enabled:                true,
+			TimestampWindowSeconds: s.config.Features.DID.Authorization.TimestampWindowSeconds,
+			SkipPaths: []string{
+				"/health",
+				"/metrics",
+				"/api/v1/health",
+			},
+		}
+		s.Router.Use(middleware.DIDAuthMiddleware(s.didWebService, didAuthConfig))
+		logger.Logger.Info().Msg("🆔 DID authentication middleware enabled")
+	}
+
 	// Expose Prometheus metrics
 	s.Router.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
@@ -953,8 +1036,27 @@ func (s *AgentFieldServer) setupRoutes() {
 		agentAPI.POST("/skills/:skill_id", handlers.ExecuteSkillHandler(s.storage))
 
 		// Unified execution endpoints (path-based)
-		agentAPI.POST("/execute/:target", handlers.ExecuteHandler(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout))
-		agentAPI.POST("/execute/async/:target", handlers.ExecuteAsyncHandler(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout))
+		// These routes may have permission middleware applied if authorization is enabled
+		executeGroup := agentAPI.Group("/execute")
+		{
+			// Apply permission middleware if authorization is enabled
+			if s.config.Features.DID.Authorization.Enabled && s.permissionService != nil && s.didWebService != nil {
+				permConfig := middleware.PermissionConfig{
+					Enabled:           true,
+					AutoRequestOnDeny: s.config.Features.DID.Authorization.AutoRequestOnDeny,
+				}
+				executeGroup.Use(middleware.PermissionCheckMiddleware(
+					s.permissionService,
+					s.storage,
+					s.didWebService,
+					permConfig,
+				))
+				logger.Logger.Info().Msg("🔒 Permission checking enabled on execute endpoints")
+			}
+
+			executeGroup.POST("/:target", handlers.ExecuteHandler(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout))
+			executeGroup.POST("/async/:target", handlers.ExecuteAsyncHandler(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout))
+		}
 		agentAPI.GET("/executions/:execution_id", handlers.GetExecutionStatusHandler(s.storage))
 		agentAPI.POST("/executions/batch-status", handlers.BatchExecutionStatusHandler(s.storage))
 		agentAPI.POST("/executions/:execution_id/status", handlers.UpdateExecutionStatusHandler(s.storage, s.payloadStore, s.webhookDispatcher, s.config.AgentField.ExecutionQueue.AgentCallTimeout))
@@ -1068,6 +1170,18 @@ func (s *AgentFieldServer) setupRoutes() {
 			settings.POST("/observability-webhook/redrive", obsHandler.RedriveHandler)
 			settings.GET("/observability-webhook/dlq", obsHandler.GetDeadLetterQueueHandler)
 			settings.DELETE("/observability-webhook/dlq", obsHandler.ClearDeadLetterQueueHandler)
+		}
+
+		// Permission API routes (VC-based authorization)
+		if s.permissionService != nil {
+			permissionHandlers := handlers.NewPermissionHandlers(s.permissionService, s.storage)
+			permissionHandlers.RegisterRoutes(agentAPI)
+
+			// Admin permission management routes
+			adminPermissionHandlers := admin.NewPermissionAdminHandlers(s.permissionService)
+			adminPermissionHandlers.RegisterRoutes(agentAPI)
+
+			logger.Logger.Info().Msg("📋 Permission API routes registered")
 		}
 	}
 

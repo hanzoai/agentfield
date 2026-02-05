@@ -14,10 +14,13 @@ import {
   Moon,
   Monitor,
   ShieldCheck,
+  Shield,
   Identification,
   FileText,
   GithubLogo,
   Question,
+  Clock,
+  RecentlyViewed,
 } from "@/components/ui/icon-bridge";
 import type { IconComponent, IconWeight } from "@/components/ui/icon-bridge";
 
@@ -36,10 +39,14 @@ const icons = {
   moon: Moon,
   monitor: Monitor,
   "shield-check": ShieldCheck,
+  shield: Shield,
   identification: Identification,
   documentation: FileText,
   github: GithubLogo,
   support: Question,
+  hourglass: Clock,
+  history: RecentlyViewed,
+  lock: Shield,
 } as const;
 
 export interface IconProps {

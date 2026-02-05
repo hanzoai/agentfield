@@ -410,3 +410,53 @@ type ObservabilityDeadLetterQueueModel struct {
 }
 
 func (ObservabilityDeadLetterQueueModel) TableName() string { return "observability_dead_letter_queue" }
+
+// PermissionApprovalModel represents a permission approval record in the database.
+// This tracks whether a caller agent has been approved to call a target agent.
+type PermissionApprovalModel struct {
+	ID            int64      `gorm:"column:id;primaryKey;autoIncrement"`
+	CallerDID     string     `gorm:"column:caller_did;not null;uniqueIndex:idx_perm_caller_target,priority:1"`
+	TargetDID     string     `gorm:"column:target_did;not null;uniqueIndex:idx_perm_caller_target,priority:2"`
+	CallerAgentID string     `gorm:"column:caller_agent_id;not null;index"`
+	TargetAgentID string     `gorm:"column:target_agent_id;not null;index"`
+	Status        string     `gorm:"column:status;not null;default:'pending';index"`
+	ApprovedBy    *string    `gorm:"column:approved_by"`
+	ApprovedAt    *time.Time `gorm:"column:approved_at"`
+	RejectedBy    *string    `gorm:"column:rejected_by"`
+	RejectedAt    *time.Time `gorm:"column:rejected_at"`
+	RevokedBy     *string    `gorm:"column:revoked_by"`
+	RevokedAt     *time.Time `gorm:"column:revoked_at"`
+	ExpiresAt     *time.Time `gorm:"column:expires_at;index"`
+	Reason        *string    `gorm:"column:reason"`
+	CreatedAt     time.Time  `gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt     time.Time  `gorm:"column:updated_at;autoUpdateTime"`
+}
+
+func (PermissionApprovalModel) TableName() string { return "permission_approvals" }
+
+// DIDDocumentModel represents a DID document record for did:web resolution.
+type DIDDocumentModel struct {
+	DID          string     `gorm:"column:did;primaryKey"`
+	AgentID      string     `gorm:"column:agent_id;not null;index"`
+	DIDDocument  []byte     `gorm:"column:did_document;not null"` // JSONB in PostgreSQL, TEXT in SQLite
+	PublicKeyJWK string     `gorm:"column:public_key_jwk;not null"`
+	RevokedAt    *time.Time `gorm:"column:revoked_at;index"`
+	CreatedAt    time.Time  `gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt    time.Time  `gorm:"column:updated_at;autoUpdateTime"`
+}
+
+func (DIDDocumentModel) TableName() string { return "did_documents" }
+
+// ProtectedAgentConfigModel represents a protected agent rule configuration.
+// Defines which agents require permission to call based on patterns.
+type ProtectedAgentConfigModel struct {
+	ID          int64     `gorm:"column:id;primaryKey;autoIncrement"`
+	PatternType string    `gorm:"column:pattern_type;not null;uniqueIndex:idx_protected_pattern,priority:1"` // 'tag', 'tag_pattern', 'agent_id'
+	Pattern     string    `gorm:"column:pattern;not null;uniqueIndex:idx_protected_pattern,priority:2"`
+	Description *string   `gorm:"column:description"`
+	Enabled     bool      `gorm:"column:enabled;not null;default:true;index"`
+	CreatedAt   time.Time `gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt   time.Time `gorm:"column:updated_at;autoUpdateTime"`
+}
+
+func (ProtectedAgentConfigModel) TableName() string { return "protected_agents_config" }

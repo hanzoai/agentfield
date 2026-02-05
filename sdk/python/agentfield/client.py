@@ -24,6 +24,7 @@ from .async_execution_manager import AsyncExecutionManager
 from .logger import get_logger
 from .status import normalize_status
 from .execution_context import generate_run_id
+from .did_auth import DIDAuthenticator
 
 httpx = None  # type: ignore
 
@@ -92,10 +93,15 @@ class AgentFieldClient:
         base_url: str = "http://localhost:8080",
         api_key: Optional[str] = None,
         async_config: Optional[AsyncConfig] = None,
+        did: Optional[str] = None,
+        private_key_jwk: Optional[str] = None,
     ):
         self.base_url = base_url
         self.api_base = f"{base_url}/api/v1"
         self.api_key = api_key
+
+        # DID authentication for agent-to-agent calls
+        self._did_authenticator = DIDAuthenticator(did=did, private_key_jwk=private_key_jwk)
 
         # Async execution components
         self.async_config = async_config or AsyncConfig()
@@ -156,6 +162,42 @@ class AgentFieldClient:
         if not self.api_key:
             return {}
         return {"X-API-Key": self.api_key}
+
+    def set_did_credentials(self, did: str, private_key_jwk: str) -> bool:
+        """
+        Set DID authentication credentials for agent-to-agent calls.
+
+        Args:
+            did: The agent's DID identifier (e.g., 'did:web:example.com:agents:my-agent')
+            private_key_jwk: JWK-formatted Ed25519 private key for signing
+
+        Returns:
+            True if credentials were set successfully, False otherwise
+        """
+        return self._did_authenticator.set_credentials(did, private_key_jwk)
+
+    def get_did_auth_headers(self, body: bytes) -> Dict[str, str]:
+        """
+        Get DID authentication headers for signing a request.
+
+        Args:
+            body: Request body bytes to sign
+
+        Returns:
+            Dictionary with DID auth headers (X-Caller-DID, X-DID-Signature, X-DID-Timestamp)
+            Empty dict if DID auth is not configured
+        """
+        return self._did_authenticator.sign_headers(body)
+
+    @property
+    def did(self) -> Optional[str]:
+        """Get the configured DID identifier."""
+        return self._did_authenticator.did
+
+    @property
+    def did_auth_configured(self) -> bool:
+        """Check if DID authentication is configured."""
+        return self._did_authenticator.is_configured
 
     def _get_headers_with_context(
         self, headers: Optional[Dict[str, str]] = None
@@ -682,19 +724,29 @@ class AgentFieldClient:
         input_data: Dict[str, Any],
         headers: Dict[str, str],
     ) -> _Submission:
+        import json as json_module
+
         payload = {"input": input_data}
+        body_bytes = json_module.dumps(payload).encode("utf-8")
+
+        # Add DID authentication headers if configured
+        final_headers = dict(headers)
+        if self._did_authenticator.is_configured:
+            did_headers = self._did_authenticator.sign_headers(body_bytes)
+            final_headers.update(did_headers)
+
         try:
             response = requests.post(
                 f"{self.api_base}/execute/async/{target}",
                 json=payload,
-                headers=headers,
+                headers=final_headers,
                 timeout=self.async_config.polling_timeout,
             )
         except requests.RequestException as exc:
             raise RuntimeError(f"Failed to submit execution: {exc}") from exc
         response.raise_for_status()
         body = response.json()
-        return self._parse_submission(body, headers, target)
+        return self._parse_submission(body, final_headers, target)
 
     async def _submit_execution_async(
         self,
@@ -702,17 +754,27 @@ class AgentFieldClient:
         input_data: Dict[str, Any],
         headers: Dict[str, str],
     ) -> _Submission:
+        import json as json_module
+
         payload = {"input": input_data}
+        body_bytes = json_module.dumps(payload).encode("utf-8")
+
+        # Add DID authentication headers if configured
+        final_headers = dict(headers)
+        if self._did_authenticator.is_configured:
+            did_headers = self._did_authenticator.sign_headers(body_bytes)
+            final_headers.update(did_headers)
+
         response = await self._async_request(
             "POST",
             f"{self.api_base}/execute/async/{target}",
             json=payload,
-            headers=headers,
+            headers=final_headers,
             timeout=self.async_config.polling_timeout,
         )
         response.raise_for_status()
         body = response.json()
-        return self._parse_submission(body, headers, target)
+        return self._parse_submission(body, final_headers, target)
 
     def _parse_submission(
         self,

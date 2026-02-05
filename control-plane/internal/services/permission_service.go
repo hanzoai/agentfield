@@ -411,6 +411,11 @@ func (s *PermissionService) ListProtectedAgentRules(ctx context.Context) ([]*typ
 	return s.storage.GetProtectedAgentRules(ctx)
 }
 
+// GetPermissionByID retrieves a permission approval by its ID.
+func (s *PermissionService) GetPermissionByID(ctx context.Context, id int64) (*types.PermissionApproval, error) {
+	return s.storage.GetPermissionApprovalByID(ctx, id)
+}
+
 // matchesPattern checks if a value matches a pattern (supports wildcards).
 func matchesPattern(pattern, value string) bool {
 	// Exact match

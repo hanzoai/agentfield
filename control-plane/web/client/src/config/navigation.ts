@@ -75,6 +75,33 @@ export const navigationSections: NavigationSection[] = [
     ]
   },
   {
+    id: 'permissions',
+    title: 'Permissions',
+    items: [
+      {
+        id: 'pending-permissions',
+        label: 'Pending Approvals',
+        href: '/permissions/pending',
+        icon: 'hourglass',
+        description: 'Review and approve pending agent permission requests'
+      },
+      {
+        id: 'permission-history',
+        label: 'Permission History',
+        href: '/permissions/history',
+        icon: 'history',
+        description: 'Audit trail of all permission decisions'
+      },
+      {
+        id: 'protected-agents',
+        label: 'Protected Agents',
+        href: '/permissions/protected-agents',
+        icon: 'lock',
+        description: 'Configure which agents require permission to call'
+      }
+    ]
+  },
+  {
     id: 'settings',
     title: 'Settings',
     items: [

@@ -17,10 +17,11 @@ import (
 
 // Client provides a thin wrapper over the AgentField control plane REST API.
 type Client struct {
-	baseURL    *url.URL
-	httpClient *http.Client
-	token      string
-	apiKey     string
+	baseURL          *url.URL
+	httpClient       *http.Client
+	token            string
+	apiKey           string
+	didAuthenticator *DIDAuthenticator
 }
 
 // Option mutates Client configuration.
@@ -46,6 +47,20 @@ func WithBearerToken(token string) Option {
 func WithAPIKey(key string) Option {
 	return func(c *Client) {
 		c.apiKey = key
+	}
+}
+
+// WithDIDAuth configures DID authentication for agent-to-agent calls.
+// The did parameter should be the agent's DID identifier (e.g., "did:web:example.com:agents:my-agent").
+// The privateKeyJWK should be the JWK-formatted Ed25519 private key for signing.
+func WithDIDAuth(did, privateKeyJWK string) Option {
+	return func(c *Client) {
+		auth, err := NewDIDAuthenticator(did, privateKeyJWK)
+		if err != nil {
+			// Log warning but don't fail - DID auth will be disabled
+			return
+		}
+		c.didAuthenticator = auth
 	}
 }
 
@@ -139,11 +154,15 @@ func (c *Client) do(ctx context.Context, method string, endpoint string, body an
 		}
 	}
 
+	var bodyBytes []byte
 	var buf io.ReadWriter = &bytes.Buffer{}
 	if body != nil {
-		if err := json.NewEncoder(buf).Encode(body); err != nil {
+		var err error
+		bodyBytes, err = json.Marshal(body)
+		if err != nil {
 			return fmt.Errorf("encode request: %w", err)
 		}
+		buf = bytes.NewBuffer(bodyBytes)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, u.String(), buf)
@@ -161,6 +180,14 @@ func (c *Client) do(ctx context.Context, method string, endpoint string, body an
 	}
 	if c.apiKey != "" {
 		req.Header.Set("X-API-Key", c.apiKey)
+	}
+
+	// Add DID authentication headers if configured
+	if c.didAuthenticator != nil && c.didAuthenticator.IsConfigured() {
+		didHeaders := c.didAuthenticator.SignRequest(bodyBytes)
+		for key, value := range didHeaders {
+			req.Header.Set(key, value)
+		}
 	}
 
 	resp, err := c.httpClient.Do(req)
@@ -202,6 +229,30 @@ func (c *Client) legacyHeartbeat(ctx context.Context, nodeID string, payload typ
 		LeaseSeconds:     int(lease.Seconds()),
 		NextLeaseRenewal: time.Now().Add(lease).UTC().Format(time.RFC3339),
 	}, nil
+}
+
+// SetDIDCredentials configures DID authentication credentials after client creation.
+// Returns an error if the credentials are invalid.
+func (c *Client) SetDIDCredentials(did, privateKeyJWK string) error {
+	auth, err := NewDIDAuthenticator(did, privateKeyJWK)
+	if err != nil {
+		return err
+	}
+	c.didAuthenticator = auth
+	return nil
+}
+
+// DIDAuthConfigured returns true if DID authentication is configured.
+func (c *Client) DIDAuthConfigured() bool {
+	return c.didAuthenticator != nil && c.didAuthenticator.IsConfigured()
+}
+
+// DID returns the configured DID identifier, or empty string if not configured.
+func (c *Client) DID() string {
+	if c.didAuthenticator == nil {
+		return ""
+	}
+	return c.didAuthenticator.DID()
 }
 
 // APIError captures non-success responses from the AgentField API.
