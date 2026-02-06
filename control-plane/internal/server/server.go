@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -256,7 +257,7 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		// Create PermissionService if authorization is enabled
 		if cfg.Features.DID.Authorization.Enabled {
 			if cfg.Features.DID.Authorization.AdminToken == "" {
-				logger.Logger.Warn().Msg("Authorization is enabled but admin_token is empty - admin routes will not be protected. Set features.did.authorization.admin_token in config or AGENTFIELD_AUTHORIZATION_ADMIN_TOKEN env var.")
+				logger.Logger.Warn().Msg("⚠️  Admin permission routes are unprotected (no admin_token configured). This is fine for local development. For production, set AGENTFIELD_AUTHORIZATION_ADMIN_TOKEN or features.did.authorization.admin_token in config.")
 			}
 			fmt.Println("🔐 Creating Permission service...")
 			permissionConfig := &services.PermissionConfig{
@@ -615,6 +616,65 @@ func (s *AgentFieldServer) healthCheckHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, healthStatus)
 }
 
+// handleDIDWebServerDocument serves the server's root DID document per W3C did:web spec.
+// GET /.well-known/did.json -> resolves did:web:{domain}
+func (s *AgentFieldServer) handleDIDWebServerDocument(c *gin.Context) {
+	serverID, err := s.didService.GetAgentFieldServerID()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "server DID not available"})
+		return
+	}
+	registry, err := s.didService.GetRegistry(serverID)
+	if err != nil || registry == nil || registry.RootDID == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "server DID not found"})
+		return
+	}
+	s.serveDIDDocument(c, registry.RootDID)
+}
+
+// handleDIDWebAgentDocument serves an agent's DID document per W3C did:web spec.
+// GET /agents/:agentID/did.json -> resolves did:web:{domain}:agents:{agentID}
+func (s *AgentFieldServer) handleDIDWebAgentDocument(c *gin.Context) {
+	agentID := c.Param("agentID")
+	if agentID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "agent ID is required"})
+		return
+	}
+	did := s.didWebService.GenerateDIDWeb(agentID)
+	s.serveDIDDocument(c, did)
+}
+
+// serveDIDDocument resolves a DID and returns a W3C-compliant DID document.
+func (s *AgentFieldServer) serveDIDDocument(c *gin.Context, did string) {
+	identity, err := s.didService.ResolveDID(did)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "DID not found"})
+		return
+	}
+
+	var publicKeyJWK map[string]interface{}
+	if err := json.Unmarshal([]byte(identity.PublicKeyJWK), &publicKeyJWK); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to parse public key"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"@context": []string{
+			"https://www.w3.org/ns/did/v1",
+			"https://w3id.org/security/suites/ed25519-2020/v1",
+		},
+		"id": did,
+		"verificationMethod": []gin.H{{
+			"id":           did + "#key-1",
+			"type":         "Ed25519VerificationKey2020",
+			"controller":   did,
+			"publicKeyJwk": publicKeyJWK,
+		}},
+		"authentication":  []string{did + "#key-1"},
+		"assertionMethod": []string{did + "#key-1"},
+	})
+}
+
 // checkStorageHealth performs storage-specific health checks
 func (s *AgentFieldServer) checkStorageHealth(ctx context.Context) gin.H {
 	if s.storageHealthOverride != nil {
@@ -763,6 +823,14 @@ func (s *AgentFieldServer) setupRoutes() {
 
 	// Public health check endpoint for load balancers and container orchestration (e.g., Railway, K8s)
 	s.Router.GET("/health", s.healthCheckHandler)
+
+	// W3C did:web resolution endpoints (spec: https://w3c-ccg.github.io/did-method-web/)
+	// did:web:{domain} resolves to GET /.well-known/did.json
+	// did:web:{domain}:agents:{agentID} resolves to GET /agents/{agentID}/did.json
+	if s.config.Features.DID.Enabled && s.didWebService != nil {
+		s.Router.GET("/.well-known/did.json", s.handleDIDWebServerDocument)
+		s.Router.GET("/agents/:agentID/did.json", s.handleDIDWebAgentDocument)
+	}
 
 	// Serve UI files - embedded or filesystem based on availability
 	if s.config.UI.Enabled {

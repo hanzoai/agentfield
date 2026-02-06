@@ -91,12 +91,26 @@ this.http = axios.create({
 
     const bodyStr = JSON.stringify({ input });
     const authHeaders = this.didAuthenticator.signRequest(Buffer.from(bodyStr));
-    const res = await this.http.post(
-      `/api/v1/execute/${target}`,
-      bodyStr,
-      { headers: this.mergeHeaders({ 'Content-Type': 'application/json', ...headers, ...authHeaders }) }
-    );
-    return (res.data?.result as T) ?? res.data;
+    try {
+      const res = await this.http.post(
+        `/api/v1/execute/${target}`,
+        bodyStr,
+        { headers: this.mergeHeaders({ 'Content-Type': 'application/json', ...headers, ...authHeaders }) }
+      );
+      return (res.data?.result as T) ?? res.data;
+    } catch (err: any) {
+      // Extract structured error from control plane response (e.g., 403 permission_denied).
+      const respData = err?.response?.data;
+      if (respData) {
+        const status = err.response.status;
+        const msg = respData.message || respData.error || JSON.stringify(respData);
+        const enriched = new Error(`execute ${target} failed (${status}): ${msg}`);
+        (enriched as any).status = status;
+        (enriched as any).responseData = respData;
+        throw enriched;
+      }
+      throw err;
+    }
   }
 
   async publishWorkflowEvent(event: {

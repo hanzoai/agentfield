@@ -781,8 +781,9 @@ func (c *executionController) prepareExecution(ctx context.Context, ginCtx *gin.
 	if err := ginCtx.ShouldBindJSON(&req); err != nil {
 		return nil, fmt.Errorf("invalid request body: %w", err)
 	}
-	if len(req.Input) == 0 {
-		return nil, errors.New("input is required")
+	// Allow empty input for skills/reasoners that take no parameters (e.g., ping, get_schema).
+	if req.Input == nil {
+		req.Input = map[string]interface{}{}
 	}
 
 	var (

@@ -91,6 +91,10 @@ func (r *testDIDResolver) GenerateDIDWeb(agentID string) string {
 	return "did:web:localhost%3A8080:agents:" + agentID
 }
 
+func (r *testDIDResolver) ResolveAgentIDByDID(_ context.Context, _ string) string {
+	return ""
+}
+
 type testDIDWebService struct {
 	publicKeys map[string]ed25519.PublicKey
 }

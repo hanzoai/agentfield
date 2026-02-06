@@ -25,6 +25,9 @@ type AgentResolverInterface interface {
 // DIDResolverInterface provides methods for resolving agent DIDs.
 type DIDResolverInterface interface {
 	GenerateDIDWeb(agentID string) string
+	// ResolveAgentIDByDID looks up the agent ID associated with a DID.
+	// Returns empty string if the DID cannot be resolved.
+	ResolveAgentIDByDID(ctx context.Context, did string) string
 }
 
 // PermissionConfig holds configuration for permission checking.
@@ -195,8 +198,12 @@ func PermissionCheckMiddleware(
 
 			// Auto-create permission request if enabled
 			if config.AutoRequestOnDeny && check.ApprovalStatus == "" {
-				// Extract caller agent ID from DID (if possible)
-				callerAgentID := extractAgentIDFromDID(callerDID)
+				// Resolve caller agent ID from DID via storage lookup, falling
+				// back to simple did:web parsing when unavailable.
+				callerAgentID := didResolver.ResolveAgentIDByDID(ctx, callerDID)
+				if callerAgentID == "" {
+					callerAgentID = extractAgentIDFromDID(callerDID)
+				}
 
 				req := &types.PermissionRequest{
 					CallerDID:     callerDID,
