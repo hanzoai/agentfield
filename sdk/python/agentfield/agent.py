@@ -3250,6 +3250,12 @@ class Agent(FastAPI):
                                 f"Async execution failed: {type(async_error).__name__}: {str(async_error)}"
                             )
 
+                        # Never fall back on authorization errors (401/403) —
+                        # these are permanent failures that retrying won't fix.
+                        _err_status = getattr(async_error, "status", None)
+                        if _err_status in (401, 403):
+                            raise async_error
+
                         if not self.async_config.fallback_to_sync:
                             raise async_error
 

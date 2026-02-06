@@ -1193,7 +1193,9 @@ class AgentFieldClient:
         """
         if self._async_execution_manager is None:
             self._async_execution_manager = AsyncExecutionManager(
-                base_url=self.base_url, config=self.async_config
+                base_url=self.base_url,
+                config=self.async_config,
+                did_authenticator=self._did_authenticator,
             )
             await self._async_execution_manager.start()
             self._maybe_update_event_stream_headers(None)
@@ -1248,6 +1250,13 @@ class AgentFieldClient:
 
         except Exception as e:
             logger.error(f"Failed to submit async execution for target {target}: {e}")
+
+            # Never fall back on authorization errors (401/403) — these are
+            # permanent failures that retrying won't fix and would hit replay
+            # protection (Ed25519 signatures are deterministic within the same second).
+            _status = getattr(e, "status", None)
+            if _status in (401, 403):
+                raise
 
             # Fallback to sync execution if enabled
             if self.async_config.fallback_to_sync:

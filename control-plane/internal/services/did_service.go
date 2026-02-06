@@ -951,12 +951,35 @@ func (s *DIDService) buildExistingIdentityPackage(existingAgent *types.AgentDIDI
 		agentfieldServerID = "unknown"
 	}
 
+	// Retrieve master seed to re-derive private keys for the requesting agent.
+	// Agents need their private keys to sign cross-agent requests (DID auth).
+	var masterSeed []byte
+	registry, err := s.registry.GetRegistry(agentfieldServerID)
+	if err != nil {
+		logger.Logger.Error().Err(err).Msg("Failed to get registry for key re-derivation")
+	} else {
+		masterSeed = registry.MasterSeed
+	}
+
+	// Helper to re-derive private key JWK from master seed and derivation path.
+	rederivePrivKey := func(derivationPath string) string {
+		if masterSeed == nil || derivationPath == "" {
+			return ""
+		}
+		_, privKeyJWK, _, err := s.generateDIDWithKeys(masterSeed, derivationPath)
+		if err != nil {
+			logger.Logger.Error().Err(err).Str("path", derivationPath).Msg("Failed to re-derive private key")
+			return ""
+		}
+		return privKeyJWK
+	}
+
 	// Build reasoner DIDs map
 	reasonerDIDs := make(map[string]types.DIDIdentity)
 	for id, reasonerInfo := range existingAgent.Reasoners {
 		reasonerDIDs[id] = types.DIDIdentity{
 			DID:            reasonerInfo.DID,
-			PrivateKeyJWK:  "", // Don't include private keys in existing package
+			PrivateKeyJWK:  rederivePrivKey(reasonerInfo.DerivationPath),
 			PublicKeyJWK:   string(reasonerInfo.PublicKeyJWK),
 			DerivationPath: reasonerInfo.DerivationPath,
 			ComponentType:  "reasoner",
@@ -969,7 +992,7 @@ func (s *DIDService) buildExistingIdentityPackage(existingAgent *types.AgentDIDI
 	for id, skillInfo := range existingAgent.Skills {
 		skillDIDs[id] = types.DIDIdentity{
 			DID:            skillInfo.DID,
-			PrivateKeyJWK:  "", // Don't include private keys in existing package
+			PrivateKeyJWK:  rederivePrivKey(skillInfo.DerivationPath),
 			PublicKeyJWK:   string(skillInfo.PublicKeyJWK),
 			DerivationPath: skillInfo.DerivationPath,
 			ComponentType:  "skill",
@@ -980,7 +1003,7 @@ func (s *DIDService) buildExistingIdentityPackage(existingAgent *types.AgentDIDI
 	return types.DIDIdentityPackage{
 		AgentDID: types.DIDIdentity{
 			DID:            existingAgent.DID,
-			PrivateKeyJWK:  "", // Don't include private keys in existing package
+			PrivateKeyJWK:  rederivePrivKey(existingAgent.DerivationPath),
 			PublicKeyJWK:   string(existingAgent.PublicKeyJWK),
 			DerivationPath: existingAgent.DerivationPath,
 			ComponentType:  "agent",

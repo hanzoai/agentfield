@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
@@ -616,7 +617,7 @@ func TestDIDHeadersInDoMethodWithContext(t *testing.T) {
 	require.NoError(t, err)
 
 	var resp map[string]interface{}
-	err = c.do(t.Context(), http.MethodPost, "/test", requestBody, &resp)
+	err = c.do(context.Background(), http.MethodPost, "/test", requestBody, &resp)
 	assert.NoError(t, err)
 	assert.Equal(t, "ok", resp["status"])
 }

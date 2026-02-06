@@ -178,6 +178,7 @@ class AsyncExecutionManager:
         config: Optional[AsyncConfig] = None,
         connection_manager: Optional[ConnectionManager] = None,
         result_cache: Optional[ResultCache] = None,
+        did_authenticator: Optional[Any] = None,
     ):
         """
         Initialize the async execution manager.
@@ -187,6 +188,7 @@ class AsyncExecutionManager:
             config: AsyncConfig instance for configuration parameters
             connection_manager: Optional ConnectionManager instance
             result_cache: Optional ResultCache instance
+            did_authenticator: Optional DIDAuthenticator for signing requests
         """
         self.base_url = base_url.rstrip("/")
         self.config = config or AsyncConfig()
@@ -197,6 +199,7 @@ class AsyncExecutionManager:
         # Initialize components
         self.connection_manager = connection_manager or ConnectionManager(self.config)
         self.result_cache = result_cache or ResultCache(self.config)
+        self._did_authenticator = did_authenticator
 
         # Execution tracking
         self._executions: Dict[str, ExecutionState] = {}
@@ -378,6 +381,14 @@ class AsyncExecutionManager:
             else:
                 raise TypeError("webhook must be a WebhookConfig or dict")
 
+        # Serialize with compact separators so the signed bytes match what gets sent.
+        body_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+
+        # Add DID authentication headers if configured
+        if self._did_authenticator is not None and self._did_authenticator.is_configured:
+            did_headers = self._did_authenticator.sign_headers(body_bytes)
+            request_headers.update(did_headers)
+
         # Set timeout
         execution_timeout = timeout or self.config.default_execution_timeout
 
@@ -387,7 +398,7 @@ class AsyncExecutionManager:
             async with self.connection_manager.get_session() as session:
                 response = await session.post(
                     url,
-                    json=payload,
+                    data=body_bytes,
                     headers=request_headers,
                     timeout=self.config.polling_timeout,
                 )

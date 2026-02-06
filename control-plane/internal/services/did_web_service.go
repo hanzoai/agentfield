@@ -290,7 +290,16 @@ func (s *DIDWebService) GetDomain() string {
 // VerifyDIDOwnership verifies that a signature was created by the private key
 // corresponding to a did:web identifier.
 func (s *DIDWebService) VerifyDIDOwnership(ctx context.Context, did string, message []byte, signature []byte) (bool, error) {
-	// Resolve the DID to get the public key
+	// Handle did:key self-resolution: public key is encoded directly in the DID.
+	if strings.HasPrefix(did, "did:key:z") {
+		pubKey, err := decodeDIDKeyPublicKey(did)
+		if err != nil {
+			return false, fmt.Errorf("failed to decode did:key public key: %w", err)
+		}
+		return ed25519.Verify(pubKey, message, signature), nil
+	}
+
+	// Resolve did:web (or other methods) via stored DID documents.
 	result, err := s.ResolveDID(ctx, did)
 	if err != nil {
 		return false, fmt.Errorf("failed to resolve DID: %w", err)
@@ -324,6 +333,33 @@ func (s *DIDWebService) VerifyDIDOwnership(ctx context.Context, did string, mess
 	// Verify the signature
 	publicKey := ed25519.PublicKey(publicKeyBytes)
 	return ed25519.Verify(publicKey, message, signature), nil
+}
+
+// decodeDIDKeyPublicKey extracts the Ed25519 public key from a did:key identifier.
+// Format: did:key:z<base64url(0xed01 + 32-byte-public-key)>
+func decodeDIDKeyPublicKey(did string) (ed25519.PublicKey, error) {
+	const prefix = "did:key:z"
+	if !strings.HasPrefix(did, prefix) {
+		return nil, fmt.Errorf("invalid did:key format")
+	}
+
+	encoded := did[len(prefix):]
+	decoded, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("failed to base64url decode did:key: %w", err)
+	}
+
+	// Verify multicodec prefix (0xed, 0x01 for Ed25519)
+	if len(decoded) < 2 || decoded[0] != 0xed || decoded[1] != 0x01 {
+		return nil, fmt.Errorf("unsupported multicodec prefix in did:key")
+	}
+
+	pubKeyBytes := decoded[2:]
+	if len(pubKeyBytes) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("invalid Ed25519 public key length: got %d, want %d", len(pubKeyBytes), ed25519.PublicKeySize)
+	}
+
+	return ed25519.PublicKey(pubKeyBytes), nil
 }
 
 // base64RawURLDecode decodes a base64 raw URL encoded string.
