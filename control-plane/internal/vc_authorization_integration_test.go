@@ -1003,7 +1003,7 @@ func TestVCAuth_Phase4_Handlers_PermissionAPI(t *testing.T) {
 	tc := setupTestContext(t)
 
 	// Set up permission handlers
-	permissionHandlers := handlers.NewPermissionHandlers(tc.permissionService, tc.storage)
+	permissionHandlers := handlers.NewPermissionHandlers(tc.permissionService, tc.storage, tc.didWebService)
 	adminPermHandlers := adminhandlers.NewPermissionAdminHandlers(tc.permissionService)
 
 	// Register routes
@@ -1034,8 +1034,16 @@ func TestVCAuth_Phase4_Handlers_PermissionAPI(t *testing.T) {
 	})
 
 	t.Run("GET /permissions/check returns permission status", func(t *testing.T) {
+		// Register a target agent so the handler can resolve it
+		checkTarget := &types.AgentNode{
+			ID:             "check-target",
+			Version:        "1.0.0",
+			DeploymentType: "long_running",
+		}
+		_ = tc.storage.RegisterAgent(tc.ctx, checkTarget)
+
 		req := httptest.NewRequest("GET",
-			"/api/v1/permissions/check?caller_did=did:web:localhost:agents:check-caller&target_did=did:web:localhost:agents:check-target",
+			"/api/v1/permissions/check?caller_did=did:web:localhost:agents:check-caller&target_agent_id=check-target",
 			nil)
 		w := httptest.NewRecorder()
 		tc.router.ServeHTTP(w, req)
@@ -1241,7 +1249,7 @@ func TestVCAuth_Phase5_EndToEnd_FullPermissionFlow(t *testing.T) {
 	tc := setupTestContext(t)
 
 	// Set up the complete routing with middlewares
-	permissionHandlers := handlers.NewPermissionHandlers(tc.permissionService, tc.storage)
+	permissionHandlers := handlers.NewPermissionHandlers(tc.permissionService, tc.storage, tc.didWebService)
 	adminPermHandlers := adminhandlers.NewPermissionAdminHandlers(tc.permissionService)
 
 	api := tc.router.Group("/api/v1")

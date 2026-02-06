@@ -2,8 +2,11 @@ package services
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
@@ -17,6 +20,7 @@ type PermissionService struct {
 	didWebService *DIDWebService
 	vcService     *VCService
 	config        *PermissionConfig
+	mu            sync.RWMutex
 	rules         []*types.ProtectedAgentRule
 }
 
@@ -65,7 +69,9 @@ func (s *PermissionService) Initialize(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to load protected agent rules: %w", err)
 	}
+	s.mu.Lock()
 	s.rules = rules
+	s.mu.Unlock()
 
 	logger.Logger.Info().
 		Int("rules_count", len(rules)).
@@ -84,7 +90,25 @@ func (s *PermissionService) RequestPermission(ctx context.Context, req *types.Pe
 	// Check if a request already exists
 	existing, err := s.storage.GetPermissionApproval(ctx, req.CallerDID, req.TargetDID)
 	if err == nil && existing != nil {
-		// Return existing request
+		// If pending or approved, return existing record as-is
+		if existing.Status == types.PermissionStatusPending || existing.Status == types.PermissionStatusApproved {
+			return existing, nil
+		}
+		// If rejected or revoked, reset to pending so it can be re-evaluated
+		existing.Status = types.PermissionStatusPending
+		existing.Reason = &req.Reason
+		existing.UpdatedAt = time.Now()
+		existing.RejectedBy = nil
+		existing.RejectedAt = nil
+		existing.RevokedBy = nil
+		existing.RevokedAt = nil
+		if err := s.storage.UpdatePermissionApproval(ctx, existing); err != nil {
+			return nil, fmt.Errorf("failed to re-request permission: %w", err)
+		}
+		logger.Logger.Info().
+			Str("caller_did", req.CallerDID).
+			Str("target_did", req.TargetDID).
+			Msg("Re-requested previously rejected/revoked permission")
 		return existing, nil
 	}
 
@@ -135,6 +159,9 @@ func (s *PermissionService) CheckPermission(ctx context.Context, callerDID, targ
 	// Check if approval exists
 	approval, err := s.storage.GetPermissionApproval(ctx, callerDID, targetDID)
 	if err != nil {
+		if !isNotFoundError(err) {
+			return nil, fmt.Errorf("failed to check permission approval: %w", err)
+		}
 		// No approval exists
 		result.ApprovalStatus = ""
 		return result, nil
@@ -157,7 +184,18 @@ func (s *PermissionService) CheckPermission(ctx context.Context, callerDID, targ
 
 // IsAgentProtected checks if an agent requires permission to call based on rules.
 func (s *PermissionService) IsAgentProtected(agentID string, tags []string) bool {
-	for _, rule := range s.rules {
+	canonicalTags := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		if normalized := normalizeTag(tag); normalized != "" {
+			canonicalTags = append(canonicalTags, normalized)
+		}
+	}
+
+	s.mu.RLock()
+	rules := s.rules
+	s.mu.RUnlock()
+
+	for _, rule := range rules {
 		if !rule.Enabled {
 			continue
 		}
@@ -168,14 +206,18 @@ func (s *PermissionService) IsAgentProtected(agentID string, tags []string) bool
 				return true
 			}
 		case types.PatternTypeTag:
-			for _, tag := range tags {
-				if tag == rule.Pattern {
+			normalizedPattern := normalizeTag(rule.Pattern)
+			legacyPattern := normalizeLegacyTagPattern(rule.Pattern)
+			for _, tag := range canonicalTags {
+				if tag == normalizedPattern || tag == legacyPattern {
 					return true
 				}
 			}
 		case types.PatternTypeTagPattern:
-			for _, tag := range tags {
-				if matchesPattern(rule.Pattern, tag) {
+			normalizedPattern := normalizeTag(rule.Pattern)
+			legacyPattern := normalizeLegacyTagPattern(rule.Pattern)
+			for _, tag := range canonicalTags {
+				if matchesPattern(normalizedPattern, tag) || (legacyPattern != normalizedPattern && matchesPattern(legacyPattern, tag)) {
 					return true
 				}
 			}
@@ -360,8 +402,14 @@ func (s *PermissionService) GeneratePermissionVC(ctx context.Context, approval *
 		vc.ExpirationDate = approval.ExpiresAt.Format(time.RFC3339)
 	}
 
-	// TODO: Sign the VC using the control plane's private key
-	// For now, we return the unsigned VC
+	// Explicitly classify this as an unsigned, non-verifiable audit record
+	// until cryptographic signing is implemented.
+	vc.Proof = &types.VCProof{
+		Type:         "UnsignedAuditRecord",
+		Created:      time.Now().Format(time.RFC3339),
+		ProofPurpose: "assertionMethod",
+		ProofValue:   "",
+	}
 
 	return vc, nil
 }
@@ -441,4 +489,23 @@ func matchesPattern(pattern, value string) bool {
 	}
 
 	return false
+}
+
+func normalizeLegacyTagPattern(pattern string) string {
+	p := normalizeTag(pattern)
+	if idx := strings.Index(p, ":"); idx >= 0 && idx+1 < len(p) {
+		return p[idx+1:]
+	}
+	return p
+}
+
+func isNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "not found") || strings.Contains(msg, "no rows")
 }

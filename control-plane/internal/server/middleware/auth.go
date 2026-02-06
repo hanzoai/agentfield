@@ -75,3 +75,32 @@ func APIKeyAuth(config AuthConfig) gin.HandlerFunc {
 		c.Next()
 	}
 }
+
+// AdminTokenAuth enforces a separate admin token for admin routes.
+// If adminToken is empty, the middleware is a no-op (falls back to global API key auth).
+func AdminTokenAuth(adminToken string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if adminToken == "" {
+			c.Next()
+			return
+		}
+
+		token := c.GetHeader("X-Admin-Token")
+		if token == "" {
+			authHeader := c.GetHeader("Authorization")
+			if strings.HasPrefix(authHeader, "Bearer ") {
+				token = strings.TrimPrefix(authHeader, "Bearer ")
+			}
+		}
+
+		if token != adminToken {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"error":   "forbidden",
+				"message": "admin token required for this operation",
+			})
+			return
+		}
+
+		c.Next()
+	}
+}

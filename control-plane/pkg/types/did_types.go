@@ -113,7 +113,7 @@ type DIDIdentityPackage struct {
 // DIDIdentity represents a single DID identity with keys.
 type DIDIdentity struct {
 	DID            string `json:"did"`
-	PrivateKeyJWK  string `json:"private_key_jwk"`
+	PrivateKeyJWK  string `json:"private_key_jwk,omitempty"`
 	PublicKeyJWK   string `json:"public_key_jwk"`
 	DerivationPath string `json:"derivation_path"`
 	ComponentType  string `json:"component_type"`

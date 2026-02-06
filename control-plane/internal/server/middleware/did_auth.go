@@ -9,8 +9,10 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/gin-gonic/gin"
 )
 
@@ -94,6 +96,15 @@ func DIDAuthMiddleware(didService DIDWebServiceInterface, config DIDAuthConfig) 
 			return
 		}
 
+		// Basic DID format validation
+		if !strings.HasPrefix(callerDID, "did:") || len(callerDID) < 8 {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+				"error":   "invalid_did_format",
+				"message": "X-Caller-DID must be a valid DID (e.g., did:web:example.com:agents:my-agent)",
+			})
+			return
+		}
+
 		// DID claimed - signature and timestamp are now required
 		if signature == "" || timestamp == "" {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
@@ -105,6 +116,8 @@ func DIDAuthMiddleware(didService DIDWebServiceInterface, config DIDAuthConfig) 
 		}
 
 		// Parse and verify timestamp (prevent replay attacks)
+		// TODO: Add nonce-based replay protection (seen-signature cache with TTL)
+		// to prevent replay within the timestamp window.
 		ts, err := strconv.ParseInt(timestamp, 10, 64)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
@@ -159,10 +172,10 @@ func DIDAuthMiddleware(didService DIDWebServiceInterface, config DIDAuthConfig) 
 		)
 
 		if err != nil {
+			logger.Logger.Warn().Err(err).Str("caller_did", callerDID).Msg("DID signature verification error")
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error":   "verification_error",
 				"message": "Failed to verify DID signature",
-				"details": err.Error(),
 			})
 			return
 		}

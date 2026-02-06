@@ -98,6 +98,9 @@ type AuthorizationConfig struct {
 	DefaultApprovalDurationHours int `yaml:"default_approval_duration_hours" mapstructure:"default_approval_duration_hours" default:"720"`
 	// AutoRequestOnDeny if true, automatically creates a permission request when access is denied
 	AutoRequestOnDeny bool `yaml:"auto_request_on_deny" mapstructure:"auto_request_on_deny" default:"true"`
+	// AdminToken is a separate token required for admin operations (approve/reject/revoke permissions,
+	// manage protected agent rules). If empty, admin routes fall back to the standard API key.
+	AdminToken string `yaml:"admin_token" mapstructure:"admin_token"`
 	// ProtectedAgents defines which agents require permission to call (seeded at startup)
 	ProtectedAgents []ProtectedAgentConfig `yaml:"protected_agents" mapstructure:"protected_agents"`
 }
@@ -237,5 +240,19 @@ func applyEnvOverrides(cfg *Config) {
 		if d, err := time.ParseDuration(val); err == nil {
 			cfg.AgentField.NodeHealth.HeartbeatStaleThreshold = d
 		}
+	}
+
+	// Authorization overrides
+	if val := os.Getenv("AGENTFIELD_AUTHORIZATION_ENABLED"); val != "" {
+		cfg.Features.DID.Authorization.Enabled = val == "true" || val == "1"
+	}
+	if val := os.Getenv("AGENTFIELD_AUTHORIZATION_DID_AUTH_ENABLED"); val != "" {
+		cfg.Features.DID.Authorization.DIDAuthEnabled = val == "true" || val == "1"
+	}
+	if val := os.Getenv("AGENTFIELD_AUTHORIZATION_DOMAIN"); val != "" {
+		cfg.Features.DID.Authorization.Domain = val
+	}
+	if val := os.Getenv("AGENTFIELD_AUTHORIZATION_ADMIN_TOKEN"); val != "" {
+		cfg.Features.DID.Authorization.AdminToken = val
 	}
 }

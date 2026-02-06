@@ -8,7 +8,7 @@ import { httpAgent, httpsAgent } from '../utils/httpAgents.js';
 
 export interface DIDIdentity {
   did: string;
-  privateKeyJwk: string;
+  privateKeyJwk?: string;
   publicKeyJwk: string;
   derivationPath: string;
   componentType: string;
@@ -158,7 +158,7 @@ export class DidClient {
   private parseIdentityPackage(pkg: any): DIDIdentityPackage {
     const parseIdentity = (data: any): DIDIdentity => ({
       did: data?.did ?? '',
-      privateKeyJwk: data?.private_key_jwk ?? '',
+      privateKeyJwk: data?.private_key_jwk,
       publicKeyJwk: data?.public_key_jwk ?? '',
       derivationPath: data?.derivation_path ?? '',
       componentType: data?.component_type ?? '',

@@ -66,14 +66,14 @@ type AgentFieldServer struct {
 	permissionService *services.PermissionService
 	agentfieldHome    string
 	// Cleanup service
-	cleanupService        *handlers.ExecutionCleanupService
-	payloadStore          services.PayloadStore
-	registryWatcherCancel context.CancelFunc
-	adminGRPCServer       *grpc.Server
-	adminListener         net.Listener
-	adminGRPCPort            int
-	webhookDispatcher        services.WebhookDispatcher
-	observabilityForwarder   services.ObservabilityForwarder
+	cleanupService         *handlers.ExecutionCleanupService
+	payloadStore           services.PayloadStore
+	registryWatcherCancel  context.CancelFunc
+	adminGRPCServer        *grpc.Server
+	adminListener          net.Listener
+	adminGRPCPort          int
+	webhookDispatcher      services.WebhookDispatcher
+	observabilityForwarder services.ObservabilityForwarder
 }
 
 // NewAgentFieldServer creates a new instance of the AgentFieldServer.
@@ -336,30 +336,30 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 	}
 
 	return &AgentFieldServer{
-		storage:               storageProvider,
-		cache:                 cacheProvider,
-		Router:                Router,
-		uiService:             uiService,
-		executionsUIService:   executionsUIService,
-		healthMonitor:         healthMonitor,
-		presenceManager:       presenceManager,
-		statusManager:         statusManager,
-		agentService:          agentService,
-		agentClient:           agentClient,
-		config:                cfg,
-		keystoreService:       keystoreService,
-		didService:            didService,
-		vcService:             vcService,
-		didRegistry:           didRegistry,
-		didWebService:         didWebService,
-		permissionService:     permissionService,
-		agentfieldHome:        agentfieldHome,
-		cleanupService:        cleanupService,
-		payloadStore:          payloadStore,
-		webhookDispatcher:        webhookDispatcher,
-		observabilityForwarder:   observabilityForwarder,
-		registryWatcherCancel:    nil,
-		adminGRPCPort:            adminPort,
+		storage:                storageProvider,
+		cache:                  cacheProvider,
+		Router:                 Router,
+		uiService:              uiService,
+		executionsUIService:    executionsUIService,
+		healthMonitor:          healthMonitor,
+		presenceManager:        presenceManager,
+		statusManager:          statusManager,
+		agentService:           agentService,
+		agentClient:            agentClient,
+		config:                 cfg,
+		keystoreService:        keystoreService,
+		didService:             didService,
+		vcService:              vcService,
+		didRegistry:            didRegistry,
+		didWebService:          didWebService,
+		permissionService:      permissionService,
+		agentfieldHome:         agentfieldHome,
+		cleanupService:         cleanupService,
+		payloadStore:           payloadStore,
+		webhookDispatcher:      webhookDispatcher,
+		observabilityForwarder: observabilityForwarder,
+		registryWatcherCancel:  nil,
+		adminGRPCPort:          adminPort,
 	}, nil
 }
 
@@ -1174,12 +1174,14 @@ func (s *AgentFieldServer) setupRoutes() {
 
 		// Permission API routes (VC-based authorization)
 		if s.permissionService != nil {
-			permissionHandlers := handlers.NewPermissionHandlers(s.permissionService, s.storage)
+			permissionHandlers := handlers.NewPermissionHandlers(s.permissionService, s.storage, s.didWebService)
 			permissionHandlers.RegisterRoutes(agentAPI)
 
-			// Admin permission management routes
+			// Admin permission management routes (protected by admin token if configured)
+			adminGroup := agentAPI.Group("")
+			adminGroup.Use(middleware.AdminTokenAuth(s.config.Features.DID.Authorization.AdminToken))
 			adminPermissionHandlers := admin.NewPermissionAdminHandlers(s.permissionService)
-			adminPermissionHandlers.RegisterRoutes(agentAPI)
+			adminPermissionHandlers.RegisterRoutes(adminGroup)
 
 			logger.Logger.Info().Msg("📋 Permission API routes registered")
 		}

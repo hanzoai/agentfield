@@ -74,25 +74,20 @@ REGISTRATION PHASE:
 └────┬────┘                    └──────┬───────┘                    └───┬───┘
      │                                │                                │
      │  1. Register                   │                                │
-     │  {agent_id, tags,              │                                │
-     │   dependencies: ["admin"]}     │                                │
+     │  {agent_id, tags}              │                                │
      │  ──────────────────────────►   │                                │
      │                                │                                │
      │                                │  2. Generate did:web           │
      │                                │  3. Generate key pair          │
      │                                │  4. Store DID document         │
-     │                                │  5. Check dependencies         │
-     │                                │     "admin" → protected? YES   │
-     │                                │  6. Create pending request     │
      │                                │                                │
-     │  7. Response:                  │                                │
+     │  5. Response:                  │                                │
      │  {did, public_key_jwk,         │                                │
-     │   private_key_jwk,  ◄───────── │  (one-time private key)       │
-     │   pending_permissions: [...]}  │                                │
+     │   private_key_jwk}             │                                │
      │  ◄──────────────────────────   │                                │
      │                                │                                │
-     │  8. Store private key          │                                │
-     │     securely                   │                                │
+     │  8. Use locally generated      │                                │
+     │     private key for signing    │                                │
      │                                │                                │
      │                                │  9. Show in Admin UI           │
      │                                │  ─────────────────────────────►│
@@ -131,12 +126,12 @@ CALL PHASE:
 |-----------|---------|--------|
 | DID Web Service | Generate/resolve did:web identifiers | ✅ Done |
 | Permission Service | Manage approvals, check permissions | ✅ Done |
-| DID Auth Middleware | Verify caller signatures | ⏳ Pending |
-| Storage Layer | Persist DIDs, approvals, rules | ⏳ Pending |
-| Permission API | HTTP endpoints for permissions | ⏳ Pending |
-| Execute Integration | Check permissions on calls | ⏳ Pending |
-| Admin UI | Approve/reject/revoke permissions | ⏳ Pending |
-| SDK Updates | Sign requests with private key | ⏳ Pending |
+| DID Auth Middleware | Verify caller signatures | ✅ Done |
+| Storage Layer | Persist DIDs, approvals, rules | ✅ Done |
+| Permission API | HTTP endpoints for permissions | ✅ Done |
+| Execute Integration | Check permissions on calls | ✅ Done |
+| Admin UI | Approve/reject/revoke permissions | ✅ Done |
+| SDK Updates | Sign requests with private key | ✅ Done |
 
 ---
 
@@ -200,30 +195,36 @@ X-DID-Timestamp: 1707091200
 **Context:** How to define what needs permission?
 
 **Decision:** Permission required for protected agents (defined by patterns).
+Canonical tag matching uses plain tag values (for example `admin`), not `key:value` strings.
 
 **Protection Rules (config file):**
 ```yaml
-permissions:
-  protected_agents:
-    - pattern_type: tag           # Exact tag match
-      pattern: admin
-    - pattern_type: tag_pattern   # Wildcard
-      pattern: "finance*"
-    - pattern_type: agent_id      # Specific agent
-      pattern: "payment-gateway"
+features:
+  did:
+    authorization:
+      protected_agents:
+        - pattern_type: tag           # Exact plain-tag match
+          pattern: admin
+        - pattern_type: tag_pattern   # Wildcard plain-tag match
+          pattern: "finance*"
+        - pattern_type: agent_id      # Specific agent
+          pattern: "payment-gateway"
 ```
 
 **Permission Check:** `(caller_did, target_did)` pair must have approved status.
+
+### Permission VC Signing Status
+
+`GET /api/v1/permissions/:id/vc` currently returns an unsigned audit record (`proof.type = "UnsignedAuditRecord"`).  
+Treat it as non-verifiable until cryptographic signing is implemented.
 
 ### Decision 5: Proactive Dependency Declaration
 
 **Context:** When should permission requests be created?
 
-**Decision:** Two mechanisms:
-1. **At registration:** Agent declares `dependencies` (tags it intends to call)
-2. **At call time:** If no permission exists, auto-create pending request
+**Decision:** At call time: If no permission exists and `auto_request_on_deny` is enabled, auto-create pending request.
 
-**Benefit:** Admin can pre-approve before agent tries to call.
+> **Note:** Proactive dependency declaration at registration time (`dependencies: ["admin"]`) was considered but is not yet implemented. Currently, permissions are only requested when a call is denied.
 
 ### Decision 6: Agent Tags are Informational Only
 
@@ -816,26 +817,17 @@ executeGroup := router.Group("/api/v1/execute")
 executeGroup.Use(didAuthMiddleware)
 ```
 
-### 2.4 Update Registration to Return Private Key
+### 2.4 Registration Must Never Return Private Keys
 
-**File to Modify:** `control-plane/internal/handlers/nodes.go`
+**Files to Modify:** SDK bootstrap and node registration payloads
 
-In registration handler, add private key to response:
+Agent private keys are generated and stored locally by the agent runtime. Registration payloads may include DID/public key material, but must never include `private_key_jwk` in responses.
 
 ```go
-// After creating DID document
-privateKeyJWK, err := didWebService.GetPrivateKeyJWK(agentID)
-if err != nil {
-    logger.Logger.Error().Err(err).Msg("Failed to get private key")
-    // Handle error
-}
-
-// Add to response
 response := gin.H{
     "agent_id":        agentID,
     "did":             did,
     "public_key_jwk":  publicKeyJWK,
-    "private_key_jwk": privateKeyJWK,  // One-time delivery
     // ... other fields
 }
 ```
@@ -1195,13 +1187,13 @@ func (h *PermissionHandlers) CheckPermission(c *gin.Context) {
     targetDID := c.Query("target_did")
     targetAgentID := c.Query("target_agent_id")
 
-    if callerDID == "" || targetDID == "" {
-        c.JSON(http.StatusBadRequest, gin.H{"error": "caller_did and target_did are required"})
+    if callerDID == "" || targetDID == "" || targetAgentID == "" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "caller_did, target_did, and target_agent_id are required"})
         return
     }
 
-    // Get target tags (would need to look up from agent registry)
-    var targetTags []string // TODO: Get from agent registry
+    // Resolve target tags from canonical source (agent registry)
+    targetTags := canonicalPlainTagsFromAgent(targetAgentID)
 
     check, err := h.permissionService.CheckPermission(
         c.Request.Context(),
@@ -1564,18 +1556,19 @@ func (h *ExecuteHandler) Execute(c *gin.Context) {
 **File to Modify:** `control-plane/internal/config/config.go`
 
 ```go
-type Config struct {
+type DIDConfig struct {
     // ... existing fields ...
-
-    Permissions PermissionConfig `yaml:"permissions" mapstructure:"permissions"`
+    Authorization AuthorizationConfig `yaml:"authorization" mapstructure:"authorization"`
 }
 
-type PermissionConfig struct {
-    Enabled              bool                    `yaml:"enabled" mapstructure:"enabled"`
-    DIDWebDomain         string                  `yaml:"did_web_domain" mapstructure:"did_web_domain"`
-    DefaultDurationHours int                     `yaml:"default_duration_hours" mapstructure:"default_duration_hours"`
-    AutoRequestOnDeny    bool                    `yaml:"auto_request_on_deny" mapstructure:"auto_request_on_deny"`
-    ProtectedAgents      []ProtectedAgentConfig  `yaml:"protected_agents" mapstructure:"protected_agents"`
+type AuthorizationConfig struct {
+    Enabled                     bool                   `yaml:"enabled" mapstructure:"enabled"`
+    DIDAuthEnabled              bool                   `yaml:"did_auth_enabled" mapstructure:"did_auth_enabled"`
+    Domain                      string                 `yaml:"domain" mapstructure:"domain"`
+    TimestampWindowSeconds      int64                  `yaml:"timestamp_window_seconds" mapstructure:"timestamp_window_seconds"`
+    DefaultApprovalDurationHours int                   `yaml:"default_approval_duration_hours" mapstructure:"default_approval_duration_hours"`
+    AutoRequestOnDeny           bool                   `yaml:"auto_request_on_deny" mapstructure:"auto_request_on_deny"`
+    ProtectedAgents             []ProtectedAgentConfig `yaml:"protected_agents" mapstructure:"protected_agents"`
 }
 
 type ProtectedAgentConfig struct {
@@ -1591,8 +1584,8 @@ type ProtectedAgentConfig struct {
 
 ```go
 // After loading config, seed protected agent rules from config
-if cfg.Permissions.Enabled && len(cfg.Permissions.ProtectedAgents) > 0 {
-    for _, rule := range cfg.Permissions.ProtectedAgents {
+if cfg.Features.DID.Authorization.Enabled && len(cfg.Features.DID.Authorization.ProtectedAgents) > 0 {
+    for _, rule := range cfg.Features.DID.Authorization.ProtectedAgents {
         _, err := permissionService.AddProtectedAgentRule(ctx, &types.ProtectedAgentRuleRequest{
             PatternType: types.ProtectedAgentPatternType(rule.PatternType),
             Pattern:     rule.Pattern,
@@ -1613,24 +1606,24 @@ if cfg.Permissions.Enabled && len(cfg.Permissions.ProtectedAgents) > 0 {
 ```yaml
 # ... existing config ...
 
-permissions:
-  enabled: true
-  did_web_domain: "localhost:8080"
-  default_duration_hours: 720  # 30 days
-  auto_request_on_deny: true
-
-  protected_agents:
-    - pattern_type: tag
-      pattern: admin
-      description: "Admin-tagged agents require permission"
-
-    - pattern_type: tag_pattern
-      pattern: "finance*"
-      description: "Finance agents require permission"
-
-    - pattern_type: agent_id
-      pattern: "payment-gateway"
-      description: "Payment gateway requires permission"
+features:
+  did:
+    authorization:
+      enabled: true
+      did_auth_enabled: true
+      domain: "localhost:8080"
+      default_approval_duration_hours: 720  # 30 days
+      auto_request_on_deny: true
+      protected_agents:
+        - pattern_type: tag
+          pattern: admin
+          description: "Admin-tagged agents require permission"
+        - pattern_type: tag_pattern
+          pattern: "finance*"
+          description: "Finance agents require permission"
+        - pattern_type: agent_id
+          pattern: "payment-gateway"
+          description: "Payment gateway requires permission"
 ```
 
 ---
@@ -1796,12 +1789,8 @@ class Agent:
         data = response.json()
         self.did = data.get("did")
 
-        # Store private key if returned (first registration)
-        if "private_key_jwk" in data and not self._private_key:
-            self._private_key = data["private_key_jwk"]
-            logger.warning(
-                "Private key received. Store securely in AGENTFIELD_PRIVATE_KEY env var."
-            )
+        # Private keys are never returned by the control plane.
+        # Agent must already be configured with local key material.
 
         # Log pending permissions
         if "pending_permissions" in data:
@@ -2018,7 +2007,7 @@ func parsePrivateKeyJWK(jwkJSON string) (ed25519.PrivateKey, error) {
 | `internal/storage/local.go` | Implement for SQLite |
 | `internal/storage/postgresql.go` | Implement for PostgreSQL |
 | `internal/server/server.go` | Register middleware and routes |
-| `internal/handlers/nodes.go` | Return private key on registration |
+| `internal/handlers/nodes.go` | Return DID/public key material only (no private keys) |
 | `internal/handlers/execute.go` | Add permission check |
 | `internal/config/config.go` | Add permission config |
 | `sdk/python/agentfield/client.py` | Sign requests |

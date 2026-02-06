@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 	"github.com/gin-gonic/gin"
 )
@@ -11,6 +12,7 @@ import (
 // PermissionServiceInterface defines the methods required for permission checking.
 type PermissionServiceInterface interface {
 	IsEnabled() bool
+	IsAgentProtected(agentID string, tags []string) bool
 	CheckPermission(ctx context.Context, callerDID, targetDID string, targetAgentID string, targetTags []string) (*types.PermissionCheck, error)
 	RequestPermission(ctx context.Context, req *types.PermissionRequest) (*types.PermissionApproval, error)
 }
@@ -76,15 +78,6 @@ func PermissionCheckMiddleware(
 			return
 		}
 
-		// Get verified caller DID from context (set by DIDAuthMiddleware)
-		callerDID := GetVerifiedCallerDID(c)
-		if callerDID == "" {
-			// No verified DID - allow through for now (might be API key auth only)
-			// Protected agents will still be protected by their rules
-			c.Next()
-			return
-		}
-
 		// Extract target from path parameter
 		target := c.Param("target")
 		if target == "" {
@@ -103,7 +96,16 @@ func PermissionCheckMiddleware(
 		// Resolve the target agent
 		ctx := c.Request.Context()
 		agent, err := agentResolver.GetAgent(ctx, agentID)
-		if err != nil || agent == nil {
+		if err != nil {
+			// Fail closed if target resolution fails to avoid bypass on transient backend errors.
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"error":           "target_resolution_failed",
+				"message":         "Unable to resolve target agent for permission enforcement",
+				"target_agent_id": agentID,
+			})
+			return
+		}
+		if agent == nil {
 			// Agent not found - let the handler deal with the error
 			c.Next()
 			return
@@ -116,18 +118,50 @@ func PermissionCheckMiddleware(
 		targetDID := didResolver.GenerateDIDWeb(agentID)
 		c.Set(string(TargetDIDKey), targetDID)
 
-		// Get agent tags for permission matching
-		tags := getAgentTags(agent)
+		// Get canonical plain tags for permission matching.
+		tags := services.CanonicalAgentTags(agent)
+		isProtected := permissionService.IsAgentProtected(agentID, tags)
+
+		// Unprotected targets may proceed without DID auth or permission approval.
+		if !isProtected {
+			c.Set(string(PermissionCheckResultKey), &PermissionCheckResult{
+				Allowed:            true,
+				RequiresPermission: false,
+			})
+			c.Next()
+			return
+		}
+
+		// Protected targets require a verified DID.
+		callerDID := GetVerifiedCallerDID(c)
+		if callerDID == "" {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error":               "did_auth_required",
+				"message":             "Protected target requires verified DID authentication",
+				"requires_permission": true,
+				"target_agent_id":     agentID,
+				"target_did":          targetDID,
+			})
+			return
+		}
 
 		// Check permission
 		check, err := permissionService.CheckPermission(ctx, callerDID, targetDID, agentID, tags)
 		if err != nil {
-			// Permission check failed - log and allow through (fail open for now)
+			// Protected targets fail closed on permission backend errors.
 			c.Set(string(PermissionCheckResultKey), &PermissionCheckResult{
-				Allowed: true, // Fail open
-				Error:   err,
+				Allowed:            false,
+				RequiresPermission: true,
+				Error:              err,
 			})
-			c.Next()
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"error":               "permission_check_failed",
+				"message":             "Permission verification failed for protected target",
+				"requires_permission": true,
+				"caller_did":          callerDID,
+				"target_did":          targetDID,
+				"target_agent_id":     agentID,
+			})
 			return
 		}
 
@@ -226,29 +260,6 @@ func parseTargetParam(target string) (agentID, reasonerName string, err error) {
 		}
 	}
 	return target, "", nil
-}
-
-// getAgentTags extracts tags from an agent node.
-func getAgentTags(agent *types.AgentNode) []string {
-	if agent == nil {
-		return nil
-	}
-
-	var tags []string
-
-	// Add explicit tags from deployment metadata
-	if agent.Metadata.Deployment != nil && agent.Metadata.Deployment.Tags != nil {
-		for key, value := range agent.Metadata.Deployment.Tags {
-			tags = append(tags, key+":"+value)
-		}
-	}
-
-	// Add deployment type as a tag
-	if agent.DeploymentType != "" {
-		tags = append(tags, "deployment:"+agent.DeploymentType)
-	}
-
-	return tags
 }
 
 // extractAgentIDFromDID attempts to extract the agent ID from a did:web identifier.

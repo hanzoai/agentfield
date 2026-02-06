@@ -114,16 +114,17 @@ For simplicity, use Option A but ensure:
 
 ## Implementation Requirements
 
-### 1. Registration Response Must Include Private Key
+### 1. Registration Must Exclude Private Keys
 
 ```go
 // DID registration response
 type DIDRegistrationResponse struct {
     DID           string `json:"did"`
     PublicKeyJWK  string `json:"public_key_jwk"`
-    PrivateKeyJWK string `json:"private_key_jwk"`  // NEW: One-time delivery
 }
 ```
+
+Private keys are generated and stored locally by the agent runtime and are never returned by control-plane endpoints.
 
 ### 2. SDK Must Store and Use Private Key
 
@@ -303,11 +304,11 @@ Agent                          Control Plane
   │  {                               │
   │    did: "did:web:...:my-agent", │
   │    public_key_jwk: {...},       │
-  │    private_key_jwk: {...}  ◄────── One-time delivery
   │  }                               │
   │  ◄────────────────────────────   │
   │                                  │
-  │  Store private key securely     │
+  │  Use locally generated private  │
+  │  key for request signing        │
 ```
 
 ### 2. Agent Calling Protected Agent
@@ -371,7 +372,7 @@ Admin                          Control Plane                    Agent A
 - `pkg/types/did_auth_types.go` - Types for authentication
 
 ### Modified Files
-- `internal/handlers/nodes.go` - Return private key on registration
+- `internal/handlers/nodes.go` - Ensure registration returns DID/public key material only
 - `internal/handlers/execute.go` - Use verified DID from context
 - `internal/server/server.go` - Add DID auth middleware
 - `sdk/python/agentfield/client.py` - Sign requests with private key
@@ -387,7 +388,7 @@ Admin                          Control Plane                    Agent A
 3. Body hash verification
 
 ### Integration Tests
-1. Registration returns private key
+1. Registration does not return private keys
 2. Request with valid signature succeeds
 3. Request with invalid signature fails
 4. Request with old timestamp fails

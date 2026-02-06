@@ -1457,12 +1457,21 @@ class Agent(FastAPI):
                 self.did_enabled = True
                 if self.dev_mode:
                     log_debug(f"DID registration successful for agent: {self.node_id}")
+
+                # Wire DID credentials to the HTTP client for request signing
+                agent_did = self.did_manager.get_agent_did()
+                agent_private_key = None
+                if self.did_manager.identity_package:
+                    agent_private_key = self.did_manager.identity_package.agent_did.private_key_jwk
+                if agent_did and agent_private_key:
+                    self.client.set_did_credentials(agent_did, agent_private_key)
+
                 # Enable VC generation
                 if self.vc_generator:
                     self.vc_generator.set_enabled(True)
                 if self.dev_mode:
                     log_info(f"Agent {self.node_id} registered with DID system")
-                    log_info(f"DID: {self.did_manager.get_agent_did()}")
+                    log_info(f"DID: {agent_did}")
             else:
                 if self.dev_mode:
                     log_warn(f"Failed to register agent {self.node_id} with DID system")

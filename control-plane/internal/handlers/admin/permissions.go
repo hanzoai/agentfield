@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 	"github.com/gin-gonic/gin"
@@ -26,10 +27,10 @@ func NewPermissionAdminHandlers(permissionService *services.PermissionService) *
 func (h *PermissionAdminHandlers) ListPendingPermissions(c *gin.Context) {
 	permissions, err := h.permissionService.ListPendingPermissions(c.Request.Context())
 	if err != nil {
+		logger.Logger.Error().Err(err).Msg("Failed to list pending permissions")
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "list_failed",
 			"message": "Failed to list pending permissions",
-			"details": err.Error(),
 		})
 		return
 	}
@@ -45,10 +46,10 @@ func (h *PermissionAdminHandlers) ListPendingPermissions(c *gin.Context) {
 func (h *PermissionAdminHandlers) ListAllPermissions(c *gin.Context) {
 	permissions, err := h.permissionService.ListAllPermissions(c.Request.Context())
 	if err != nil {
+		logger.Logger.Error().Err(err).Msg("Failed to list permissions")
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "list_failed",
 			"message": "Failed to list permissions",
-			"details": err.Error(),
 		})
 		return
 	}
@@ -74,10 +75,10 @@ func (h *PermissionAdminHandlers) GetPermission(c *gin.Context) {
 
 	permission, err := h.permissionService.GetPermissionByID(c.Request.Context(), id)
 	if err != nil {
+		logger.Logger.Error().Err(err).Int64("permission_id", id).Msg("Permission not found")
 		c.JSON(http.StatusNotFound, gin.H{
 			"error":   "not_found",
 			"message": "Permission not found",
-			"details": err.Error(),
 		})
 		return
 	}
@@ -118,10 +119,10 @@ func (h *PermissionAdminHandlers) ApprovePermission(c *gin.Context) {
 		req.DurationHours,
 	)
 	if err != nil {
+		logger.Logger.Error().Err(err).Int64("permission_id", id).Msg("Failed to approve permission")
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":   "approve_failed",
 			"message": "Failed to approve permission",
-			"details": err.Error(),
 		})
 		return
 	}
@@ -161,10 +162,10 @@ func (h *PermissionAdminHandlers) RejectPermission(c *gin.Context) {
 		req.Reason,
 	)
 	if err != nil {
+		logger.Logger.Error().Err(err).Int64("permission_id", id).Msg("Failed to reject permission")
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":   "reject_failed",
 			"message": "Failed to reject permission",
-			"details": err.Error(),
 		})
 		return
 	}
@@ -204,10 +205,10 @@ func (h *PermissionAdminHandlers) RevokePermission(c *gin.Context) {
 		req.Reason,
 	)
 	if err != nil {
+		logger.Logger.Error().Err(err).Int64("permission_id", id).Msg("Failed to revoke permission")
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":   "revoke_failed",
 			"message": "Failed to revoke permission",
-			"details": err.Error(),
 		})
 		return
 	}
@@ -220,10 +221,10 @@ func (h *PermissionAdminHandlers) RevokePermission(c *gin.Context) {
 func (h *PermissionAdminHandlers) ListProtectedAgentRules(c *gin.Context) {
 	rules, err := h.permissionService.ListProtectedAgentRules(c.Request.Context())
 	if err != nil {
+		logger.Logger.Error().Err(err).Msg("Failed to list protected agent rules")
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "list_failed",
 			"message": "Failed to list protected agent rules",
-			"details": err.Error(),
 		})
 		return
 	}
@@ -242,7 +243,6 @@ func (h *PermissionAdminHandlers) AddProtectedAgentRule(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":   "invalid_request",
 			"message": "Invalid request body",
-			"details": err.Error(),
 		})
 		return
 	}
@@ -269,10 +269,10 @@ func (h *PermissionAdminHandlers) AddProtectedAgentRule(c *gin.Context) {
 
 	rule, err := h.permissionService.AddProtectedAgentRule(c.Request.Context(), &req)
 	if err != nil {
+		logger.Logger.Error().Err(err).Msg("Failed to create protected agent rule")
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "create_failed",
 			"message": "Failed to create protected agent rule",
-			"details": err.Error(),
 		})
 		return
 	}
@@ -294,10 +294,10 @@ func (h *PermissionAdminHandlers) RemoveProtectedAgentRule(c *gin.Context) {
 	}
 
 	if err := h.permissionService.RemoveProtectedAgentRule(c.Request.Context(), id); err != nil {
+		logger.Logger.Error().Err(err).Int64("rule_id", id).Msg("Failed to delete protected agent rule")
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "delete_failed",
 			"message": "Failed to delete protected agent rule",
-			"details": err.Error(),
 		})
 		return
 	}

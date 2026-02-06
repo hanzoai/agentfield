@@ -20,7 +20,7 @@ class DIDIdentity:
     """Represents a DID identity with cryptographic keys."""
 
     did: str
-    private_key_jwk: str
+    private_key_jwk: Optional[str]
     public_key_jwk: str
     derivation_path: str
     component_type: str
@@ -282,7 +282,7 @@ class DIDManager:
         agent_data = package_data["agent_did"]
         agent_did = DIDIdentity(
             did=agent_data["did"],
-            private_key_jwk=agent_data["private_key_jwk"],
+            private_key_jwk=agent_data.get("private_key_jwk"),
             public_key_jwk=agent_data["public_key_jwk"],
             derivation_path=agent_data["derivation_path"],
             component_type=agent_data["component_type"],
@@ -294,7 +294,7 @@ class DIDManager:
         for name, reasoner_data in package_data["reasoner_dids"].items():
             reasoner_dids[name] = DIDIdentity(
                 did=reasoner_data["did"],
-                private_key_jwk=reasoner_data["private_key_jwk"],
+                private_key_jwk=reasoner_data.get("private_key_jwk"),
                 public_key_jwk=reasoner_data["public_key_jwk"],
                 derivation_path=reasoner_data["derivation_path"],
                 component_type=reasoner_data["component_type"],
@@ -306,7 +306,7 @@ class DIDManager:
         for name, skill_data in package_data["skill_dids"].items():
             skill_dids[name] = DIDIdentity(
                 did=skill_data["did"],
-                private_key_jwk=skill_data["private_key_jwk"],
+                private_key_jwk=skill_data.get("private_key_jwk"),
                 public_key_jwk=skill_data["public_key_jwk"],
                 derivation_path=skill_data["derivation_path"],
                 component_type=skill_data["component_type"],

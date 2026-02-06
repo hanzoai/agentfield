@@ -81,7 +81,7 @@ export interface DIDIdentityPackage {
 
 export interface DIDIdentity {
   did: string;
-  private_key_jwk: string;
+  private_key_jwk?: string;
   public_key_jwk: string;
   derivation_path: string;
   component_type: string;

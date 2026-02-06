@@ -945,6 +945,12 @@ export class Agent {
             const summary = this.didManager.getIdentitySummary();
             console.log(`[DID] Agent registered with DID: ${summary.agentDid}`);
             console.log(`[DID] Reasoner DIDs: ${summary.reasonerCount}, Skill DIDs: ${summary.skillCount}`);
+
+            // Wire DID credentials to the HTTP client for request signing
+            const pkg = this.didManager.getIdentityPackage();
+            if (pkg?.agentDid?.did && pkg?.agentDid?.privateKeyJwk) {
+              this.agentFieldClient.setDIDCredentials(pkg.agentDid.did, pkg.agentDid.privateKeyJwk);
+            }
           }
         } catch (didErr) {
           if (!this.config.devMode) {

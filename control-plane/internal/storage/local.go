@@ -7515,7 +7515,7 @@ func (ls *LocalStorage) ListPermissionApprovals(ctx context.Context, status type
 		SELECT id, caller_did, target_did, caller_agent_id, target_agent_id,
 			   status, approved_by, approved_at, rejected_by, rejected_at,
 			   revoked_by, revoked_at, expires_at, reason, created_at, updated_at
-		FROM permission_approvals WHERE status = ? ORDER BY created_at DESC`
+		FROM permission_approvals WHERE status = ? ORDER BY created_at DESC LIMIT 1000`
 
 	rows, err := ls.db.QueryContext(ctx, query, status)
 	if err != nil {
@@ -7536,7 +7536,7 @@ func (ls *LocalStorage) ListAllPermissionApprovals(ctx context.Context) ([]*type
 		SELECT id, caller_did, target_did, caller_agent_id, target_agent_id,
 			   status, approved_by, approved_at, rejected_by, rejected_at,
 			   revoked_by, revoked_at, expires_at, reason, created_at, updated_at
-		FROM permission_approvals ORDER BY created_at DESC`
+		FROM permission_approvals ORDER BY created_at DESC LIMIT 1000`
 
 	rows, err := ls.db.QueryContext(ctx, query)
 	if err != nil {
@@ -7814,6 +7814,7 @@ func (ls *LocalStorage) StoreDIDDocument(ctx context.Context, record *types.DIDD
 			agent_id = excluded.agent_id,
 			did_document = excluded.did_document,
 			public_key_jwk = excluded.public_key_jwk,
+			revoked_at = excluded.revoked_at,
 			updated_at = excluded.updated_at`
 
 	_, err := ls.db.ExecContext(ctx, query,

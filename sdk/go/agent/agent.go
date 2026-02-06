@@ -179,6 +179,15 @@ type Config struct {
 	// MemoryBackend allows plugging in a custom memory storage backend.
 	// Optional. If nil, an in-memory backend is used (data lost on restart).
 	MemoryBackend MemoryBackend
+
+	// DID is the agent's decentralized identifier for DID authentication.
+	// Optional. If set along with PrivateKeyJWK, enables DID auth on
+	// all control plane requests.
+	DID string
+
+	// PrivateKeyJWK is the JWK-formatted Ed25519 private key for signing
+	// DID-authenticated requests. Optional. Must be set together with DID.
+	PrivateKeyJWK string
 }
 
 // CLIConfig controls CLI behaviour and presentation.
@@ -270,7 +279,11 @@ func New(cfg Config) (*Agent, error) {
 	}
 
 	if strings.TrimSpace(cfg.AgentFieldURL) != "" {
-		c, err := client.New(cfg.AgentFieldURL, client.WithHTTPClient(httpClient), client.WithBearerToken(cfg.Token))
+		opts := []client.Option{client.WithHTTPClient(httpClient), client.WithBearerToken(cfg.Token)}
+		if cfg.DID != "" && cfg.PrivateKeyJWK != "" {
+			opts = append(opts, client.WithDIDAuth(cfg.DID, cfg.PrivateKeyJWK))
+		}
+		c, err := client.New(cfg.AgentFieldURL, opts...)
 		if err != nil {
 			return nil, err
 		}
