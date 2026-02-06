@@ -14,6 +14,7 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
+	"github.com/google/uuid"
 )
 
 // VCService handles verifiable credential generation, verification, and management.
@@ -466,6 +467,59 @@ func (s *VCService) signVC(vcDoc *types.VCDocument, callerIdentity *types.DIDIde
 	return base64.RawURLEncoding.EncodeToString(signature), nil
 }
 
+// SignPermissionVC signs a PermissionVCDocument using the control plane's issuer DID.
+// Returns the signed proof to be set on the VC document.
+func (s *VCService) SignPermissionVC(vc *types.PermissionVCDocument) (*types.VCProof, error) {
+	// Resolve the issuer's identity (control plane DID)
+	issuerIdentity, err := s.didService.ResolveDID(vc.Issuer)
+	if err != nil {
+		// If the issuer DID can't be resolved (e.g. did:web not registered yet),
+		// fall back to unsigned audit record
+		logger.Logger.Warn().Err(err).Str("issuer", vc.Issuer).Msg("Cannot resolve issuer DID for VC signing, falling back to unsigned")
+		return &types.VCProof{
+			Type:         "UnsignedAuditRecord",
+			Created:      time.Now().Format(time.RFC3339),
+			ProofPurpose: "assertionMethod",
+			ProofValue:   "",
+		}, nil
+	}
+
+	// Create canonical representation (without proof) for signing
+	vcCopy := *vc
+	vcCopy.Proof = nil
+	canonicalBytes, err := json.Marshal(vcCopy)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal permission VC for signing: %w", err)
+	}
+
+	// Parse private key from JWK
+	var jwk map[string]interface{}
+	if err := json.Unmarshal([]byte(issuerIdentity.PrivateKeyJWK), &jwk); err != nil {
+		return nil, fmt.Errorf("failed to parse issuer private key JWK: %w", err)
+	}
+
+	dValue, ok := jwk["d"].(string)
+	if !ok {
+		return nil, fmt.Errorf("invalid issuer private key JWK: missing 'd' parameter")
+	}
+
+	privateKeySeed, err := base64.RawURLEncoding.DecodeString(dValue)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode issuer private key seed: %w", err)
+	}
+
+	privateKey := ed25519.NewKeyFromSeed(privateKeySeed)
+	signature := ed25519.Sign(privateKey, canonicalBytes)
+
+	return &types.VCProof{
+		Type:               "Ed25519Signature2020",
+		Created:            time.Now().UTC().Format(time.RFC3339),
+		VerificationMethod: fmt.Sprintf("%s#key-1", vc.Issuer),
+		ProofPurpose:       "assertionMethod",
+		ProofValue:         base64.RawURLEncoding.EncodeToString(signature),
+	}, nil
+}
+
 // verifyVCSignature verifies the signature of a VC document.
 func (s *VCService) verifyVCSignature(vcDoc *types.VCDocument, issuerIdentity *types.DIDIdentity) (bool, error) {
 	// Create canonical representation for verification
@@ -515,11 +569,9 @@ func (s *VCService) hashData(data []byte) string {
 	return base64.RawURLEncoding.EncodeToString(hash[:])
 }
 
-// generateVCID generates a unique VC ID.
+// generateVCID generates a unique VC ID using a cryptographically random UUID.
 func (s *VCService) generateVCID() string {
-	// Simple UUID-like generation for now
-	// In production, use proper UUID library
-	return fmt.Sprintf("vc-%d", time.Now().UnixNano())
+	return fmt.Sprintf("vc-%s", uuid.New().String())
 }
 
 // generateWorkflowVCDocument creates a WorkflowVC document on-demand.

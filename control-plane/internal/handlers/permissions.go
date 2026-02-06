@@ -67,17 +67,29 @@ func (h *PermissionHandlers) RequestPermission(c *gin.Context) {
 		return
 	}
 
-	// If DID auth is enabled, verify that the caller_did matches the authenticated DID
-	if verifiedDID, exists := c.Get("verified_caller_did"); exists {
-		if verifiedDIDStr, ok := verifiedDID.(string); ok && verifiedDIDStr != "" {
-			if req.CallerDID != verifiedDIDStr {
-				c.JSON(http.StatusForbidden, gin.H{
-					"error":   "did_mismatch",
-					"message": "caller_did does not match authenticated DID",
-				})
-				return
-			}
-		}
+	// Verify that the caller_did matches the authenticated DID.
+	// If DID auth middleware is not active (disabled or skipped), reject the request
+	// to prevent DID spoofing - callers must prove DID ownership via signature.
+	verifiedDID, exists := c.Get("verified_caller_did")
+	if !exists {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error":   "did_auth_required",
+			"message": "DID authentication is required to request permissions",
+		})
+		return
+	}
+	if verifiedDIDStr, ok := verifiedDID.(string); !ok || verifiedDIDStr == "" {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error":   "did_auth_required",
+			"message": "DID authentication is required to request permissions",
+		})
+		return
+	} else if req.CallerDID != verifiedDIDStr {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error":   "did_mismatch",
+			"message": "caller_did does not match authenticated DID",
+		})
+		return
 	}
 
 	approval, err := h.permissionService.RequestPermission(c.Request.Context(), &req)
@@ -210,12 +222,19 @@ func (h *PermissionHandlers) GetPermissionVC(c *gin.Context) {
 	c.JSON(http.StatusOK, vc)
 }
 
-// RegisterRoutes registers permission-related routes.
+// RegisterRoutes registers permission-related routes (agent-facing, no admin auth required).
 func (h *PermissionHandlers) RegisterRoutes(router *gin.RouterGroup) {
 	permGroup := router.Group("/permissions")
 	{
 		permGroup.POST("/request", h.RequestPermission)
 		permGroup.GET("/check", h.CheckPermission)
+	}
+}
+
+// RegisterAdminRoutes registers admin-only permission routes (requires admin auth).
+func (h *PermissionHandlers) RegisterAdminRoutes(router *gin.RouterGroup) {
+	permGroup := router.Group("/permissions")
+	{
 		permGroup.GET("/:id/vc", h.GetPermissionVC)
 	}
 }

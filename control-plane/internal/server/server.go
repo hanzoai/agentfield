@@ -16,6 +16,7 @@ import (
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/config"
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/interfaces"
+	"github.com/Agent-Field/agentfield/control-plane/internal/encryption"
 	coreservices "github.com/Agent-Field/agentfield/control-plane/internal/core/services" // Core services
 	"github.com/Agent-Field/agentfield/control-plane/internal/events"                     // Event system
 	"github.com/Agent-Field/agentfield/control-plane/internal/handlers"                   // Agent handlers
@@ -183,6 +184,10 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 
 		fmt.Println("📋 Creating DID registry...")
 		didRegistry = services.NewDIDRegistryWithStorage(storageProvider)
+		if passphrase := cfg.Features.DID.Keystore.EncryptionPassphrase; passphrase != "" {
+			didRegistry.SetEncryptionService(encryption.NewEncryptionService(passphrase))
+			fmt.Println("🔐 Master seed encryption enabled")
+		}
 
 		fmt.Println("🆔 Creating DID service...")
 		didService = services.NewDIDService(&cfg.Features.DID, keystoreService, didRegistry)
@@ -250,6 +255,9 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 
 		// Create PermissionService if authorization is enabled
 		if cfg.Features.DID.Authorization.Enabled {
+			if cfg.Features.DID.Authorization.AdminToken == "" {
+				logger.Logger.Warn().Msg("Authorization is enabled but admin_token is empty - admin routes will not be protected. Set features.did.authorization.admin_token in config or AGENTFIELD_FEATURES_DID_AUTHORIZATION_ADMIN_TOKEN env var.")
+			}
 			fmt.Println("🔐 Creating Permission service...")
 			permissionConfig := &services.PermissionConfig{
 				Enabled:              true,
@@ -1182,6 +1190,8 @@ func (s *AgentFieldServer) setupRoutes() {
 			adminGroup.Use(middleware.AdminTokenAuth(s.config.Features.DID.Authorization.AdminToken))
 			adminPermissionHandlers := admin.NewPermissionAdminHandlers(s.permissionService)
 			adminPermissionHandlers.RegisterRoutes(adminGroup)
+			// VC endpoint requires admin auth (contains sensitive approval metadata)
+			permissionHandlers.RegisterAdminRoutes(adminGroup)
 
 			logger.Logger.Info().Msg("📋 Permission API routes registered")
 		}

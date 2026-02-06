@@ -128,11 +128,12 @@ type VCRequirements struct {
 
 // KeystoreConfig holds keystore configuration.
 type KeystoreConfig struct {
-	Type           string `yaml:"type" mapstructure:"type" default:"local"`
-	Path           string `yaml:"path" mapstructure:"path" default:"./data/keys"`
-	Encryption     string `yaml:"encryption" mapstructure:"encryption" default:"AES-256-GCM"`
-	BackupEnabled  bool   `yaml:"backup_enabled" mapstructure:"backup_enabled" default:"true"`
-	BackupInterval string `yaml:"backup_interval" mapstructure:"backup_interval" default:"24h"`
+	Type                 string `yaml:"type" mapstructure:"type" default:"local"`
+	Path                 string `yaml:"path" mapstructure:"path" default:"./data/keys"`
+	Encryption           string `yaml:"encryption" mapstructure:"encryption" default:"AES-256-GCM"`
+	EncryptionPassphrase string `yaml:"encryption_passphrase" mapstructure:"encryption_passphrase"`
+	BackupEnabled        bool   `yaml:"backup_enabled" mapstructure:"backup_enabled" default:"true"`
+	BackupInterval       string `yaml:"backup_interval" mapstructure:"backup_interval" default:"24h"`
 }
 
 // APIConfig holds configuration for API settings

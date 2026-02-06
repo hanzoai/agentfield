@@ -12,7 +12,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
@@ -221,6 +220,16 @@ func setupTestContext(t *testing.T) *testContext {
 	// Set up Gin router for HTTP tests
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
+
+	// Add test middleware that simulates DID auth verification.
+	// In production, the DID auth middleware verifies signatures and sets verified_caller_did.
+	// For integration tests, we trust the X-Caller-DID header directly.
+	router.Use(func(c *gin.Context) {
+		if did := c.GetHeader("X-Caller-DID"); did != "" {
+			c.Set("verified_caller_did", did)
+		}
+		c.Next()
+	})
 
 	tc := &testContext{
 		t:                 t,
@@ -1022,6 +1031,7 @@ func TestVCAuth_Phase4_Handlers_PermissionAPI(t *testing.T) {
 
 		req := httptest.NewRequest("POST", "/api/v1/permissions/request", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Caller-DID", "did:web:localhost:agents:api-caller")
 		w := httptest.NewRecorder()
 		tc.router.ServeHTTP(w, req)
 
@@ -1080,6 +1090,7 @@ func TestVCAuth_Phase4_Handlers_PermissionAPI(t *testing.T) {
 		}`
 		createReq := httptest.NewRequest("POST", "/api/v1/permissions/request", strings.NewReader(createBody))
 		createReq.Header.Set("Content-Type", "application/json")
+		createReq.Header.Set("X-Caller-DID", "did:web:localhost:agents:to-approve-api")
 		createW := httptest.NewRecorder()
 		tc.router.ServeHTTP(createW, createReq)
 		require.Equal(t, 201, createW.Code)
@@ -1113,6 +1124,7 @@ func TestVCAuth_Phase4_Handlers_PermissionAPI(t *testing.T) {
 		}`
 		createReq := httptest.NewRequest("POST", "/api/v1/permissions/request", strings.NewReader(createBody))
 		createReq.Header.Set("Content-Type", "application/json")
+		createReq.Header.Set("X-Caller-DID", "did:web:localhost:agents:to-reject-api")
 		createW := httptest.NewRecorder()
 		tc.router.ServeHTTP(createW, createReq)
 
@@ -1145,6 +1157,7 @@ func TestVCAuth_Phase4_Handlers_PermissionAPI(t *testing.T) {
 		}`
 		createReq := httptest.NewRequest("POST", "/api/v1/permissions/request", strings.NewReader(createBody))
 		createReq.Header.Set("Content-Type", "application/json")
+		createReq.Header.Set("X-Caller-DID", "did:web:localhost:agents:to-revoke-api")
 		createW := httptest.NewRecorder()
 		tc.router.ServeHTTP(createW, createReq)
 
@@ -1299,6 +1312,7 @@ func TestVCAuth_Phase5_EndToEnd_FullPermissionFlow(t *testing.T) {
 
 		requestReq := httptest.NewRequest("POST", "/api/v1/permissions/request", strings.NewReader(requestBody))
 		requestReq.Header.Set("Content-Type", "application/json")
+		requestReq.Header.Set("X-Caller-DID", callerDID)
 		requestW := httptest.NewRecorder()
 		tc.router.ServeHTTP(requestW, requestReq)
 		require.Equal(t, 201, requestW.Code)
@@ -1365,6 +1379,7 @@ func TestVCAuth_Phase5_EndToEnd_FullPermissionFlow(t *testing.T) {
 		t.Logf("Creating permission request: callerDID=%s, targetDID=%s", callerDID, targetDID)
 		permReq := httptest.NewRequest("POST", "/api/v1/permissions/request", strings.NewReader(requestBody))
 		permReq.Header.Set("Content-Type", "application/json")
+		permReq.Header.Set("X-Caller-DID", callerDID)
 		requestW := httptest.NewRecorder()
 		tc.router.ServeHTTP(requestW, permReq)
 		require.Equal(t, 201, requestW.Code, "permission request should succeed: %s", requestW.Body.String())
@@ -1976,8 +1991,3 @@ func TestVCAuth_Regression_DIDWebDocumentCreatedDuringRegistration(t *testing.T)
 // =============================================================================
 // Utility for reading response bodies
 // =============================================================================
-
-func readBody(body io.Reader) []byte {
-	data, _ := io.ReadAll(body)
-	return data
-}

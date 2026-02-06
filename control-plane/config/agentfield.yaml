@@ -36,6 +36,11 @@ api:
       - "Accept"
       - "Authorization"
       - "X-Requested-With"
+      - "X-API-Key"
+      - "X-Admin-Token"
+      - "X-Caller-DID"
+      - "X-DID-Signature"
+      - "X-DID-Timestamp"
     exposed_headers:
       - "Content-Length"
       - "X-Total-Count"

@@ -48,6 +48,27 @@ func (p *PermissionApproval) IsValid() bool {
 	return true
 }
 
+// EffectiveStatus returns the display status accounting for expiration.
+// If the DB status is "approved" but the permission has expired, returns "expired".
+func (p *PermissionApproval) EffectiveStatus() PermissionStatus {
+	if p.Status == PermissionStatusApproved && p.ExpiresAt != nil && time.Now().After(*p.ExpiresAt) {
+		return PermissionStatusExpired
+	}
+	return p.Status
+}
+
+// MarshalJSON adds an effective_status field to the JSON output that accounts for expiration.
+func (p PermissionApproval) MarshalJSON() ([]byte, error) {
+	type Alias PermissionApproval
+	return json.Marshal(&struct {
+		Alias
+		EffectiveStatus PermissionStatus `json:"effective_status"`
+	}{
+		Alias:           (Alias)(p),
+		EffectiveStatus: p.EffectiveStatus(),
+	})
+}
+
 // PermissionRequest represents a request to create a new permission.
 type PermissionRequest struct {
 	CallerDID     string `json:"caller_did" binding:"required"`

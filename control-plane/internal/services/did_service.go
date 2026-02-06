@@ -9,12 +9,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/config"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
+	"golang.org/x/crypto/hkdf"
 )
 
 // DIDService handles DID generation, management, and resolution.
@@ -511,15 +513,19 @@ func (s *DIDService) generateDIDFromSeed(masterSeed []byte, derivationPath strin
 	return s.generateDIDKey(publicKey), nil
 }
 
-// derivePrivateKey derives a private key from master seed using simplified BIP32-style derivation.
+// derivePrivateKey derives a private key from master seed using HKDF (RFC 5869).
+// Uses domain-separated derivation with SHA-256, the derivation path as info,
+// and a fixed salt for domain separation.
 func (s *DIDService) derivePrivateKey(masterSeed []byte, derivationPath string) (ed25519.PrivateKey, error) {
-	// Simplified derivation: hash master seed with derivation path
-	h := sha256.New()
-	h.Write(masterSeed)
-	h.Write([]byte(derivationPath))
-	derivedSeed := h.Sum(nil)
+	salt := []byte("agentfield-did-key-derivation-v1")
+	info := []byte(derivationPath)
 
-	// Generate Ed25519 private key from derived seed
+	hkdfReader := hkdf.New(sha256.New, masterSeed, salt, info)
+	derivedSeed := make([]byte, ed25519.SeedSize) // 32 bytes
+	if _, err := io.ReadFull(hkdfReader, derivedSeed); err != nil {
+		return nil, fmt.Errorf("HKDF key derivation failed: %w", err)
+	}
+
 	privateKey := ed25519.NewKeyFromSeed(derivedSeed)
 	return privateKey, nil
 }

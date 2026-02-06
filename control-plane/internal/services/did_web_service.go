@@ -172,6 +172,16 @@ func (s *DIDWebService) RevokeDID(ctx context.Context, did string) error {
 	return nil
 }
 
+// IsDIDRevoked checks if a DID has been revoked.
+// Returns true if revoked, false if active or not found.
+func (s *DIDWebService) IsDIDRevoked(ctx context.Context, did string) bool {
+	record, err := s.storage.GetDIDDocument(ctx, did)
+	if err != nil {
+		return false // Not found = not revoked (may not have a did:web doc)
+	}
+	return record.IsRevoked()
+}
+
 // GetOrCreateDIDDocument gets an existing DID document or creates a new one.
 // This is useful when registering agents - we want to reuse existing DIDs if the agent
 // has the same ID, or create new ones for new agents.

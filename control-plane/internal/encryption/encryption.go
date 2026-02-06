@@ -97,6 +97,60 @@ func (es *EncryptionService) Decrypt(ciphertext string) (string, error) {
 	return string(plaintext), nil
 }
 
+// EncryptBytes encrypts raw bytes and returns the ciphertext as bytes (nonce prepended).
+func (es *EncryptionService) EncryptBytes(plaintext []byte) ([]byte, error) {
+	if len(plaintext) == 0 {
+		return nil, nil
+	}
+
+	block, err := aes.NewCipher(es.key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create AES cipher: %w", err)
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
+	}
+
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, fmt.Errorf("failed to generate nonce: %w", err)
+	}
+
+	return gcm.Seal(nonce, nonce, plaintext, nil), nil
+}
+
+// DecryptBytes decrypts ciphertext bytes (nonce prepended) and returns the plaintext bytes.
+func (es *EncryptionService) DecryptBytes(ciphertext []byte) ([]byte, error) {
+	if len(ciphertext) == 0 {
+		return nil, nil
+	}
+
+	block, err := aes.NewCipher(es.key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create AES cipher: %w", err)
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
+	}
+
+	nonceSize := gcm.NonceSize()
+	if len(ciphertext) < nonceSize {
+		return nil, fmt.Errorf("ciphertext too short")
+	}
+
+	nonce, encryptedData := ciphertext[:nonceSize], ciphertext[nonceSize:]
+	plaintext, err := gcm.Open(nil, nonce, encryptedData, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt: %w", err)
+	}
+
+	return plaintext, nil
+}
+
 // EncryptConfigurationValues encrypts sensitive values in a configuration map
 func (es *EncryptionService) EncryptConfigurationValues(config map[string]interface{}, secretFields []string) (map[string]interface{}, error) {
 	result := make(map[string]interface{})

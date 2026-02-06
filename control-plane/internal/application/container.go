@@ -7,6 +7,7 @@ import (
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/cli/framework"
 	"github.com/Agent-Field/agentfield/control-plane/internal/config"
+	"github.com/Agent-Field/agentfield/control-plane/internal/encryption"
 	"github.com/Agent-Field/agentfield/control-plane/internal/core/services"
 	"github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/process"
 	"github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/storage"
@@ -55,6 +56,9 @@ func CreateServiceContainer(cfg *config.Config, agentfieldHome string) *framewor
 		// Create DID registry with database storage (required)
 		if storageProvider != nil {
 			didRegistry = didServices.NewDIDRegistryWithStorage(storageProvider)
+			if passphrase := cfg.Features.DID.Keystore.EncryptionPassphrase; passphrase != "" {
+				didRegistry.SetEncryptionService(encryption.NewEncryptionService(passphrase))
+			}
 		} else {
 			// DID registry requires database storage, skip if not available
 			didRegistry = nil

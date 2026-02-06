@@ -170,13 +170,16 @@ func (s *PermissionService) CheckPermission(ctx context.Context, callerDID, targ
 	result.ApprovalID = &approval.ID
 	result.ApprovalStatus = approval.Status
 
-	// Check if approval is valid
+	// Check if approval is valid (status + expiry)
 	if approval.IsValid() {
+		// Additionally check if the caller's DID has been revoked
+		if s.didWebService != nil && s.didWebService.IsDIDRevoked(ctx, callerDID) {
+			result.HasValidApproval = false
+			return result, nil
+		}
+
 		result.HasValidApproval = true
 		result.ExpiresAt = approval.ExpiresAt
-
-		// Generate VC if needed (could be cached)
-		// For now, we just return the approval status
 	}
 
 	return result, nil
@@ -402,13 +405,20 @@ func (s *PermissionService) GeneratePermissionVC(ctx context.Context, approval *
 		vc.ExpirationDate = approval.ExpiresAt.Format(time.RFC3339)
 	}
 
-	// Explicitly classify this as an unsigned, non-verifiable audit record
-	// until cryptographic signing is implemented.
-	vc.Proof = &types.VCProof{
-		Type:         "UnsignedAuditRecord",
-		Created:      time.Now().Format(time.RFC3339),
-		ProofPurpose: "assertionMethod",
-		ProofValue:   "",
+	// Sign the VC using the control plane's issuer DID
+	if s.vcService != nil {
+		proof, err := s.vcService.SignPermissionVC(vc)
+		if err != nil {
+			logger.Logger.Warn().Err(err).Msg("Failed to sign permission VC, using unsigned audit record")
+			vc.Proof = &types.VCProof{
+				Type:         "UnsignedAuditRecord",
+				Created:      time.Now().Format(time.RFC3339),
+				ProofPurpose: "assertionMethod",
+				ProofValue:   "",
+			}
+		} else {
+			vc.Proof = proof
+		}
 	}
 
 	return vc, nil

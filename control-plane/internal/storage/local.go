@@ -7814,7 +7814,6 @@ func (ls *LocalStorage) StoreDIDDocument(ctx context.Context, record *types.DIDD
 			agent_id = excluded.agent_id,
 			did_document = excluded.did_document,
 			public_key_jwk = excluded.public_key_jwk,
-			revoked_at = excluded.revoked_at,
 			updated_at = excluded.updated_at`
 
 	_, err := ls.db.ExecContext(ctx, query,

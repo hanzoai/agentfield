@@ -5,11 +5,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
@@ -40,7 +42,64 @@ const (
 	VerifiedCallerDIDKey ContextKey = "verified_caller_did"
 	// DIDAuthSkippedKey is set when DID auth was skipped (no DID claimed).
 	DIDAuthSkippedKey ContextKey = "did_auth_skipped"
+
+	// maxDIDLength is the maximum allowed DID length to prevent abuse.
+	maxDIDLength = 512
+
+	// maxBodySize is the maximum request body size for DID auth verification (1MB).
+	maxBodySize = 1 << 20
 )
+
+// signatureCache provides replay protection by tracking recently seen signatures.
+type signatureCache struct {
+	mu      sync.Mutex
+	entries map[string]time.Time
+	ttl     time.Duration
+}
+
+func newSignatureCache(ttl time.Duration) *signatureCache {
+	sc := &signatureCache{
+		entries: make(map[string]time.Time),
+		ttl:     ttl,
+	}
+	// Start background cleanup goroutine
+	go sc.cleanup()
+	return sc
+}
+
+// seen returns true if this signature has been seen before (replay).
+// If not seen, records it and returns false.
+func (sc *signatureCache) seen(sig string) bool {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+
+	if expiry, exists := sc.entries[sig]; exists {
+		if time.Now().Before(expiry) {
+			return true // Replay detected
+		}
+		// Entry expired, allow reuse
+		delete(sc.entries, sig)
+	}
+
+	sc.entries[sig] = time.Now().Add(sc.ttl)
+	return false
+}
+
+// cleanup periodically removes expired entries to prevent unbounded growth.
+func (sc *signatureCache) cleanup() {
+	ticker := time.NewTicker(sc.ttl)
+	defer ticker.Stop()
+	for range ticker.C {
+		sc.mu.Lock()
+		now := time.Now()
+		for sig, expiry := range sc.entries {
+			if now.After(expiry) {
+				delete(sc.entries, sig)
+			}
+		}
+		sc.mu.Unlock()
+	}
+}
 
 // DIDAuthMiddleware creates a gin middleware that verifies DID-based authentication.
 //
@@ -53,7 +112,8 @@ const (
 //  2. If X-Caller-DID is present, X-DID-Signature and X-DID-Timestamp are required
 //  3. The timestamp must be within the configured time window (default: 5 minutes)
 //  4. The signature is verified against: timestamp + ":" + SHA256(body)
-//  5. On successful verification, the verified DID is stored in the gin context
+//  5. Replay protection rejects signatures seen within the timestamp window
+//  6. On successful verification, the verified DID is stored in the gin context
 //
 // This middleware should be applied AFTER API key authentication and BEFORE
 // routes that need to know the caller's identity.
@@ -67,6 +127,9 @@ func DIDAuthMiddleware(didService DIDWebServiceInterface, config DIDAuthConfig) 
 	for _, p := range config.SkipPaths {
 		skipPathSet[p] = struct{}{}
 	}
+
+	// Create signature replay cache with TTL matching the timestamp window
+	replayCache := newSignatureCache(time.Duration(config.TimestampWindowSeconds) * time.Second)
 
 	return func(c *gin.Context) {
 		// Skip if DID auth is disabled
@@ -96,11 +159,11 @@ func DIDAuthMiddleware(didService DIDWebServiceInterface, config DIDAuthConfig) 
 			return
 		}
 
-		// Basic DID format validation
-		if !strings.HasPrefix(callerDID, "did:") || len(callerDID) < 8 {
+		// DID format validation with length limit to prevent abuse/log injection
+		if !strings.HasPrefix(callerDID, "did:") || len(callerDID) < 8 || len(callerDID) > maxDIDLength {
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
 				"error":   "invalid_did_format",
-				"message": "X-Caller-DID must be a valid DID (e.g., did:web:example.com:agents:my-agent)",
+				"message": "X-Caller-DID must be a valid DID",
 			})
 			return
 		}
@@ -116,8 +179,6 @@ func DIDAuthMiddleware(didService DIDWebServiceInterface, config DIDAuthConfig) 
 		}
 
 		// Parse and verify timestamp (prevent replay attacks)
-		// TODO: Add nonce-based replay protection (seen-signature cache with TTL)
-		// to prevent replay within the timestamp window.
 		ts, err := strconv.ParseInt(timestamp, 10, 64)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
@@ -137,12 +198,19 @@ func DIDAuthMiddleware(didService DIDWebServiceInterface, config DIDAuthConfig) 
 			return
 		}
 
-		// Read and restore request body for signature verification
-		bodyBytes, err := io.ReadAll(c.Request.Body)
+		// Read and restore request body for signature verification (with size limit)
+		bodyBytes, err := io.ReadAll(io.LimitReader(c.Request.Body, maxBodySize+1))
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
 				"error":   "body_read_error",
 				"message": "Failed to read request body",
+			})
+			return
+		}
+		if len(bodyBytes) > maxBodySize {
+			c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{
+				"error":   "body_too_large",
+				"message": fmt.Sprintf("Request body exceeds %d bytes limit for DID authentication", maxBodySize),
 			})
 			return
 		}
@@ -159,6 +227,17 @@ func DIDAuthMiddleware(didService DIDWebServiceInterface, config DIDAuthConfig) 
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error":   "invalid_signature_encoding",
 				"message": "X-DID-Signature must be valid base64",
+			})
+			return
+		}
+
+		// Replay protection: check if this signature was already used
+		sigHash := sha256.Sum256(sigBytes)
+		sigKey := hex.EncodeToString(sigHash[:])
+		if replayCache.seen(sigKey) {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error":   "replay_detected",
+				"message": "This signature has already been used",
 			})
 			return
 		}
