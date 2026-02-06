@@ -163,6 +163,9 @@ def test_register_agent_with_did_enables_vc(monkeypatch):
     assert result is True
     assert agent.did_enabled is True
     assert agent.vc_generator.is_enabled() is True
+    # Verify DID credentials were wired to the HTTP client
+    assert agent.client.did_credentials is not None
+    assert agent.client.did_credentials[0] == "did:agent:test-agent"
 
 
 def test_populate_execution_context_with_did(monkeypatch):
