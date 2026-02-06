@@ -44,20 +44,21 @@ this.http = axios.create({
   }
 
   async register(payload: any) {
-    const bodyBytes = Buffer.from(JSON.stringify(payload));
-    const authHeaders = this.didAuthenticator.signRequest(bodyBytes);
-    await this.http.post('/api/v1/nodes/register', payload, { headers: this.mergeHeaders(authHeaders) });
+    const bodyStr = JSON.stringify(payload);
+    const authHeaders = this.didAuthenticator.signRequest(Buffer.from(bodyStr));
+    await this.http.post('/api/v1/nodes/register', bodyStr, {
+      headers: this.mergeHeaders({ 'Content-Type': 'application/json', ...authHeaders })
+    });
   }
 
   async heartbeat(status: 'starting' | 'ready' | 'degraded' | 'offline' = 'ready'): Promise<HealthStatus> {
     const nodeId = this.config.nodeId;
-    const payload = { status, timestamp: new Date().toISOString() };
-    const bodyBytes = Buffer.from(JSON.stringify(payload));
-    const authHeaders = this.didAuthenticator.signRequest(bodyBytes);
+    const bodyStr = JSON.stringify({ status, timestamp: new Date().toISOString() });
+    const authHeaders = this.didAuthenticator.signRequest(Buffer.from(bodyStr));
     const res = await this.http.post(
       `/api/v1/nodes/${nodeId}/heartbeat`,
-      payload,
-      { headers: this.mergeHeaders(authHeaders) }
+      bodyStr,
+      { headers: this.mergeHeaders({ 'Content-Type': 'application/json', ...authHeaders }) }
     );
     return res.data as HealthStatus;
   }
@@ -88,13 +89,12 @@ this.http = axios.create({
     if (metadata?.agentNodeDid) headers['X-Agent-Node-DID'] = metadata.agentNodeDid;
     if (metadata?.agentNodeId) headers['X-Agent-Node-ID'] = metadata.agentNodeId;
 
-    const payload = { input };
-    const bodyBytes = Buffer.from(JSON.stringify(payload));
-    const authHeaders = this.didAuthenticator.signRequest(bodyBytes);
+    const bodyStr = JSON.stringify({ input });
+    const authHeaders = this.didAuthenticator.signRequest(Buffer.from(bodyStr));
     const res = await this.http.post(
       `/api/v1/execute/${target}`,
-      payload,
-      { headers: this.mergeHeaders({ ...headers, ...authHeaders }) }
+      bodyStr,
+      { headers: this.mergeHeaders({ 'Content-Type': 'application/json', ...headers, ...authHeaders }) }
     );
     return (res.data?.result as T) ?? res.data;
   }
@@ -129,11 +129,11 @@ this.http = axios.create({
       duration_ms: event.durationMs
     };
 
-    const bodyBytes = Buffer.from(JSON.stringify(payload));
-    const authHeaders = this.didAuthenticator.signRequest(bodyBytes);
+    const bodyStr = JSON.stringify(payload);
+    const authHeaders = this.didAuthenticator.signRequest(Buffer.from(bodyStr));
     const request = this.http
-      .post('/api/v1/workflow/executions/events', payload, {
-        headers: this.mergeHeaders(authHeaders),
+      .post('/api/v1/workflow/executions/events', bodyStr, {
+        headers: this.mergeHeaders({ 'Content-Type': 'application/json', ...authHeaders }),
         timeout: this.config.devMode ? 1000 : undefined
       })
       .catch(() => {
@@ -157,9 +157,11 @@ this.http = axios.create({
       progress: update.progress !== undefined ? Math.round(update.progress) : undefined
     };
 
-    const bodyBytes = Buffer.from(JSON.stringify(payload));
-    const authHeaders = this.didAuthenticator.signRequest(bodyBytes);
-    await this.http.post(`/api/v1/executions/${executionId}/status`, payload, { headers: this.mergeHeaders(authHeaders) });
+    const bodyStr = JSON.stringify(payload);
+    const authHeaders = this.didAuthenticator.signRequest(Buffer.from(bodyStr));
+    await this.http.post(`/api/v1/executions/${executionId}/status`, bodyStr, {
+      headers: this.mergeHeaders({ 'Content-Type': 'application/json', ...authHeaders })
+    });
   }
 
   async discoverCapabilities(options: DiscoveryOptions = {}): Promise<DiscoveryResult> {
@@ -358,16 +360,16 @@ this.http = axios.create({
     };
 
     const executionHeaders = this.buildExecutionHeaders({ ...metadata, agentNodeId });
-    const bodyBytes = Buffer.from(JSON.stringify(payload));
-    const authHeaders = this.didAuthenticator.signRequest(bodyBytes);
+    const bodyStr = JSON.stringify(payload);
+    const authHeaders = this.didAuthenticator.signRequest(Buffer.from(bodyStr));
     const headers = this.mergeHeaders({
-      'content-type': 'application/json',
+      'Content-Type': 'application/json',
       ...executionHeaders,
       ...authHeaders
     });
 
     const request = axios
-      .post(`${uiApiBaseUrl}/executions/note`, payload, {
+      .post(`${uiApiBaseUrl}/executions/note`, bodyStr, {
         headers,
         timeout: devMode ? 5000 : 10000,
         httpAgent,

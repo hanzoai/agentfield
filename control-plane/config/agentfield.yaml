@@ -93,3 +93,6 @@ features:
         - pattern_type: "agent_id"
           pattern: "permission-agent-b"
           description: "Test protected agent for permission testing"
+        - pattern_type: "agent_id"
+          pattern: "go-perm-target"
+          description: "Go SDK test protected agent"

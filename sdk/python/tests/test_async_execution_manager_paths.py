@@ -129,7 +129,8 @@ async def test_submit_execution_wraps_payload(monkeypatch):
     assert session_post.await_count == 1
     call = session_post.await_args
     assert call.args[0] == "http://example/api/v1/execute/async/node.reasoner"
-    assert call.kwargs["json"] == {"input": {"foo": "bar"}}
+    import json as json_module
+    assert json_module.loads(call.kwargs["data"]) == {"input": {"foo": "bar"}}
 
 
 @pytest.mark.asyncio

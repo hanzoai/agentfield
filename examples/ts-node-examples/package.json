@@ -10,7 +10,9 @@
     "dev:simulation": "tsx simulation/main.ts",
     "dev:init-example": "tsx init-example/main.ts",
     "dev:serverless": "tsx serverless-hello/main.ts",
-    "dev:vc": "tsx verifiable-credentials/main.ts"
+    "dev:vc": "tsx verifiable-credentials/main.ts",
+    "dev:perm-a": "tsx permission-agent-a/main.ts",
+    "dev:perm-b": "tsx permission-agent-b/main.ts"
   },
   "dependencies": {
     "@agentfield/sdk": "file:../../sdk/typescript",
