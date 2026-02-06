@@ -3,7 +3,7 @@
  * API client for VC-based authorization endpoints
  */
 
-import { getGlobalApiKey } from './api';
+import { getGlobalApiKey, getGlobalAdminToken } from './api';
 import type {
   PermissionApproval,
   PermissionListResponse,
@@ -26,6 +26,11 @@ async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Re
 
   if (apiKey) {
     (headers as Record<string, string>)['X-Api-Key'] = apiKey;
+  }
+
+  const adminToken = getGlobalAdminToken();
+  if (adminToken) {
+    (headers as Record<string, string>)['X-Admin-Token'] = adminToken;
   }
 
   const response = await fetch(url, {

@@ -55,16 +55,23 @@ type signatureCache struct {
 	mu      sync.Mutex
 	entries map[string]time.Time
 	ttl     time.Duration
+	stop    chan struct{}
 }
 
 func newSignatureCache(ttl time.Duration) *signatureCache {
 	sc := &signatureCache{
 		entries: make(map[string]time.Time),
 		ttl:     ttl,
+		stop:    make(chan struct{}),
 	}
 	// Start background cleanup goroutine
 	go sc.cleanup()
 	return sc
+}
+
+// Close stops the background cleanup goroutine.
+func (sc *signatureCache) Close() {
+	close(sc.stop)
 }
 
 // seen returns true if this signature has been seen before (replay).
@@ -89,15 +96,20 @@ func (sc *signatureCache) seen(sig string) bool {
 func (sc *signatureCache) cleanup() {
 	ticker := time.NewTicker(sc.ttl)
 	defer ticker.Stop()
-	for range ticker.C {
-		sc.mu.Lock()
-		now := time.Now()
-		for sig, expiry := range sc.entries {
-			if now.After(expiry) {
-				delete(sc.entries, sig)
+	for {
+		select {
+		case <-ticker.C:
+			sc.mu.Lock()
+			now := time.Now()
+			for sig, expiry := range sc.entries {
+				if now.After(expiry) {
+					delete(sc.entries, sig)
+				}
 			}
+			sc.mu.Unlock()
+		case <-sc.stop:
+			return
 		}
-		sc.mu.Unlock()
 	}
 }
 

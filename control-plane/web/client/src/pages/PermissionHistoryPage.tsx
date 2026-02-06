@@ -140,13 +140,13 @@ export function PermissionHistoryPage() {
     }
   };
 
-  // Filter permissions
+  // Filter and sort permissions
   const filteredPermissions = useMemo(() => {
     let result = permissions;
 
-    // Status filter
+    // Status filter (use effective_status which accounts for expiration)
     if (statusFilter !== "all") {
-      result = result.filter((p) => p.status === statusFilter);
+      result = result.filter((p) => (p.effective_status || p.status) === statusFilter);
     }
 
     // Search filter
@@ -161,11 +161,20 @@ export function PermissionHistoryPage() {
       );
     }
 
+    // Sort
+    result = [...result].sort((a, b) => {
+      const key = sortBy as keyof PermissionApproval;
+      const aVal = a[key] ?? "";
+      const bVal = b[key] ?? "";
+      const cmp = String(aVal).localeCompare(String(bVal));
+      return sortOrder === "asc" ? cmp : -cmp;
+    });
+
     return result;
-  }, [permissions, statusFilter, debouncedQuery]);
+  }, [permissions, statusFilter, debouncedQuery, sortBy, sortOrder]);
 
   const getActionDetails = (item: PermissionApproval) => {
-    switch (item.status) {
+    switch (item.effective_status || item.status) {
       case "approved":
         return { by: item.approved_by, at: item.approved_at };
       case "rejected":
@@ -184,7 +193,8 @@ export function PermissionHistoryPage() {
       sortable: false,
       align: "center" as const,
       render: (item: PermissionApproval) => {
-        const config = STATUS_CONFIG[item.status] || STATUS_CONFIG.pending;
+        const displayStatus = item.effective_status || item.status;
+        const config = STATUS_CONFIG[displayStatus] || STATUS_CONFIG.pending;
         return (
           <Badge variant="outline" className={config.variant}>
             {config.icon}

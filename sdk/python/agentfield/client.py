@@ -727,10 +727,12 @@ class AgentFieldClient:
         import json as json_module
 
         payload = {"input": input_data}
-        body_bytes = json_module.dumps(payload).encode("utf-8")
+        # Serialize once so the signed bytes are exactly what gets sent.
+        body_bytes = json_module.dumps(payload, separators=(",", ":")).encode("utf-8")
 
         # Add DID authentication headers if configured
         final_headers = dict(headers)
+        final_headers["Content-Type"] = "application/json"
         if self._did_authenticator.is_configured:
             did_headers = self._did_authenticator.sign_headers(body_bytes)
             final_headers.update(did_headers)
@@ -738,7 +740,7 @@ class AgentFieldClient:
         try:
             response = requests.post(
                 f"{self.api_base}/execute/async/{target}",
-                json=payload,
+                data=body_bytes,
                 headers=final_headers,
                 timeout=self.async_config.polling_timeout,
             )
@@ -757,10 +759,14 @@ class AgentFieldClient:
         import json as json_module
 
         payload = {"input": input_data}
-        body_bytes = json_module.dumps(payload).encode("utf-8")
+        # Serialize once so the signed bytes are exactly what gets sent.
+        # httpx uses compact separators (',', ':') which differ from
+        # json.dumps() defaults (', ', ': '), causing signature mismatch.
+        body_bytes = json_module.dumps(payload, separators=(",", ":")).encode("utf-8")
 
         # Add DID authentication headers if configured
         final_headers = dict(headers)
+        final_headers["Content-Type"] = "application/json"
         if self._did_authenticator.is_configured:
             did_headers = self._did_authenticator.sign_headers(body_bytes)
             final_headers.update(did_headers)
@@ -768,7 +774,7 @@ class AgentFieldClient:
         response = await self._async_request(
             "POST",
             f"{self.api_base}/execute/async/{target}",
-            json=payload,
+            content=body_bytes,
             headers=final_headers,
             timeout=self.async_config.polling_timeout,
         )

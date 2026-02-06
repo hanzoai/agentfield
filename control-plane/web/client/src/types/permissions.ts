@@ -12,6 +12,7 @@ export interface PermissionApproval {
   caller_agent_id: string;
   target_agent_id: string;
   status: PermissionStatus;
+  effective_status: PermissionStatus;
   approved_by?: string;
   approved_at?: string;
   rejected_by?: string;

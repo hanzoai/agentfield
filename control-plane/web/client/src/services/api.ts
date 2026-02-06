@@ -56,6 +56,31 @@ export function getGlobalApiKey(): string | null {
   return globalApiKey;
 }
 
+// Admin token for accessing admin-only permission management routes.
+// Stored separately from the API key since it provides elevated privileges.
+const ADMIN_TOKEN_STORAGE_KEY = "af_admin_token";
+
+let globalAdminToken: string | null = (() => {
+  try {
+    const stored = localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY);
+    if (stored) {
+      const key = decryptKey(stored);
+      if (key) return key;
+    }
+  } catch {
+    // localStorage might not be available
+  }
+  return null;
+})();
+
+export function setGlobalAdminToken(token: string | null) {
+  globalAdminToken = token;
+}
+
+export function getGlobalAdminToken(): string | null {
+  return globalAdminToken;
+}
+
 /**
  * Enhanced fetch wrapper with MCP-specific error handling, retry logic, and timeout support
  */

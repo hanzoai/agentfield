@@ -77,7 +77,7 @@ def install_httpx_stub(monkeypatch, *, on_request):
 def test_execute_sync_injects_run_id(monkeypatch):
     captured = {}
 
-    def fake_post(url, json, headers, timeout):
+    def fake_post(url, data=None, json=None, headers=None, timeout=None, **kwargs):
         captured["post"] = (url, headers)
         return DummyResponse(
             {
@@ -121,7 +121,7 @@ def test_execute_sync_injects_run_id(monkeypatch):
 def test_execute_sync_respects_parent_header(monkeypatch):
     captured = {}
 
-    def fake_post(url, json, headers, timeout):
+    def fake_post(url, data=None, json=None, headers=None, timeout=None, **kwargs):
         captured["post"] = headers
         return DummyResponse(
             {

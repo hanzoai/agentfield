@@ -256,7 +256,7 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		// Create PermissionService if authorization is enabled
 		if cfg.Features.DID.Authorization.Enabled {
 			if cfg.Features.DID.Authorization.AdminToken == "" {
-				logger.Logger.Warn().Msg("Authorization is enabled but admin_token is empty - admin routes will not be protected. Set features.did.authorization.admin_token in config or AGENTFIELD_FEATURES_DID_AUTHORIZATION_ADMIN_TOKEN env var.")
+				logger.Logger.Warn().Msg("Authorization is enabled but admin_token is empty - admin routes will not be protected. Set features.did.authorization.admin_token in config or AGENTFIELD_AUTHORIZATION_ADMIN_TOKEN env var.")
 			}
 			fmt.Println("🔐 Creating Permission service...")
 			permissionConfig := &services.PermissionConfig{

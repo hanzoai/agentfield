@@ -345,13 +345,21 @@ func (s *VCService) CreateWorkflowVC(workflowID, sessionID string, executionVCID
 		return nil, fmt.Errorf("DID system is disabled")
 	}
 
+	// Derive start time from the first execution VC if available.
+	startTime := time.Now()
+	if len(executionVCIDs) > 0 {
+		if firstVC, err := s.vcStorage.GetExecutionVC(executionVCIDs[0]); err == nil {
+			startTime = firstVC.CreatedAt
+		}
+	}
+
 	workflowVC := &types.WorkflowVC{
 		WorkflowID:     workflowID,
 		SessionID:      sessionID,
 		ComponentVCs:   executionVCIDs,
 		WorkflowVCID:   s.generateVCID(),
 		Status:         string(types.ExecutionStatusSucceeded),
-		StartTime:      time.Now(), // TODO: Get actual start time from first execution
+		StartTime:      startTime,
 		EndTime:        &[]time.Time{time.Now()}[0],
 		TotalSteps:     len(executionVCIDs),
 		CompletedSteps: len(executionVCIDs),

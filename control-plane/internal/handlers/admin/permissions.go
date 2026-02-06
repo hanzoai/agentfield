@@ -105,11 +105,14 @@ func (h *PermissionAdminHandlers) ApprovePermission(c *gin.Context) {
 		req = types.PermissionApproveRequest{}
 	}
 
-	// Get approver identity from context or header
-	// In a real implementation, this would come from authentication
+	// Admin identity for audit trail. The admin token provides authentication;
+	// this header is an optional label for tracking which admin performed the action.
 	approvedBy := c.GetHeader("X-Admin-User")
 	if approvedBy == "" {
 		approvedBy = "admin"
+	}
+	if len(approvedBy) > 128 {
+		approvedBy = approvedBy[:128]
 	}
 
 	approval, err := h.permissionService.ApprovePermission(
@@ -149,10 +152,13 @@ func (h *PermissionAdminHandlers) RejectPermission(c *gin.Context) {
 		req = types.PermissionRejectRequest{}
 	}
 
-	// Get rejector identity from context or header
+	// Admin identity for audit trail (see approve handler comment)
 	rejectedBy := c.GetHeader("X-Admin-User")
 	if rejectedBy == "" {
 		rejectedBy = "admin"
+	}
+	if len(rejectedBy) > 128 {
+		rejectedBy = rejectedBy[:128]
 	}
 
 	approval, err := h.permissionService.RejectPermission(
@@ -192,10 +198,13 @@ func (h *PermissionAdminHandlers) RevokePermission(c *gin.Context) {
 		req = types.PermissionRevokeRequest{}
 	}
 
-	// Get revoker identity from context or header
+	// Admin identity for audit trail (see approve handler comment)
 	revokedBy := c.GetHeader("X-Admin-User")
 	if revokedBy == "" {
 		revokedBy = "admin"
+	}
+	if len(revokedBy) > 128 {
+		revokedBy = revokedBy[:128]
 	}
 
 	approval, err := h.permissionService.RevokePermission(

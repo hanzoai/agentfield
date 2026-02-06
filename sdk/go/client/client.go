@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"path"
@@ -57,7 +58,7 @@ func WithDIDAuth(did, privateKeyJWK string) Option {
 	return func(c *Client) {
 		auth, err := NewDIDAuthenticator(did, privateKeyJWK)
 		if err != nil {
-			// Log warning but don't fail - DID auth will be disabled
+			log.Printf("WARNING: DID auth disabled due to JWK parse error: %v", err)
 			return
 		}
 		c.didAuthenticator = auth
@@ -87,6 +88,19 @@ func New(baseURL string, opts ...Option) (*Client, error) {
 	}
 
 	return c, nil
+}
+
+// SignHTTPRequest applies DID authentication headers to an existing HTTP request.
+// This is useful for code paths that construct their own requests (e.g., execute calls)
+// rather than going through the client's do() method.
+// If DID auth is not configured, this is a no-op.
+func (c *Client) SignHTTPRequest(req *http.Request, body []byte) {
+	if c == nil || c.didAuthenticator == nil || !c.didAuthenticator.IsConfigured() {
+		return
+	}
+	for key, value := range c.didAuthenticator.SignRequest(body) {
+		req.Header.Set(key, value)
+	}
 }
 
 // RegisterNode registers or updates the agent node with the control plane.

@@ -174,10 +174,18 @@ func (s *DIDWebService) RevokeDID(ctx context.Context, did string) error {
 
 // IsDIDRevoked checks if a DID has been revoked.
 // Returns true if revoked, false if active or not found.
+// On storage errors (other than not-found), returns true to fail closed.
 func (s *DIDWebService) IsDIDRevoked(ctx context.Context, did string) bool {
 	record, err := s.storage.GetDIDDocument(ctx, did)
 	if err != nil {
-		return false // Not found = not revoked (may not have a did:web doc)
+		// Check if this is a "not found" error vs a real storage failure.
+		// Not found means the DID was never registered — treat as not revoked.
+		// Any other error (DB timeout, connection failure) — fail closed.
+		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no rows") {
+			return false
+		}
+		logger.Logger.Warn().Err(err).Str("did", did).Msg("Storage error checking DID revocation, failing closed")
+		return true
 	}
 	return record.IsRevoked()
 }

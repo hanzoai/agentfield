@@ -104,7 +104,7 @@ class TestAPIKeyAuthentication:
         """execute_sync should include X-API-Key header in requests."""
         captured = {}
 
-        def fake_post(url, json, headers, timeout):
+        def fake_post(url, data=None, json=None, headers=None, timeout=None, **kwargs):
             captured["post_headers"] = headers
             return DummyResponse(
                 {
@@ -142,7 +142,7 @@ class TestAPIKeyAuthentication:
         """execute_sync should not include X-API-Key when not configured."""
         captured = {}
 
-        def fake_post(url, json, headers, timeout):
+        def fake_post(url, data=None, json=None, headers=None, timeout=None, **kwargs):
             captured["post_headers"] = headers
             return DummyResponse(
                 {
@@ -237,7 +237,7 @@ class TestAPIKeyAuthentication:
         """API key should be merged with user-provided headers."""
         captured = {}
 
-        def fake_post(url, json, headers, timeout):
+        def fake_post(url, data=None, json=None, headers=None, timeout=None, **kwargs):
             captured["headers"] = headers
             return DummyResponse(
                 {
@@ -277,7 +277,7 @@ class TestAPIKeyAuthentication:
         """User-provided X-API-Key header should not override configured key."""
         captured = {}
 
-        def fake_post(url, json, headers, timeout):
+        def fake_post(url, data=None, json=None, headers=None, timeout=None, **kwargs):
             captured["headers"] = headers
             return DummyResponse(
                 {

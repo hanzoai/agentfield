@@ -938,6 +938,11 @@ func (a *Agent) postExecutionStatus(ctx context.Context, callbackURL string, pay
 		}
 		req.Header.Set("Content-Type", "application/json")
 
+		// Sign request with DID auth headers if configured
+		if a.client != nil {
+			a.client.SignHTTPRequest(req, payload)
+		}
+
 		resp, err := a.httpClient.Do(req)
 		if err != nil {
 			lastErr = err
@@ -1002,6 +1007,11 @@ func (a *Agent) Call(ctx context.Context, target string, input map[string]any) (
 	}
 	if a.cfg.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+a.cfg.Token)
+	}
+
+	// Sign request with DID auth headers if configured
+	if a.client != nil {
+		a.client.SignHTTPRequest(req, body)
 	}
 
 	resp, err := a.httpClient.Do(req)
@@ -1107,6 +1117,11 @@ func (a *Agent) sendWorkflowEvent(event types.WorkflowExecutionEvent) error {
 	req.Header.Set("Content-Type", "application/json")
 	if a.cfg.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+a.cfg.Token)
+	}
+
+	// Sign request with DID auth headers if configured
+	if a.client != nil {
+		a.client.SignHTTPRequest(req, body)
 	}
 
 	resp, err := a.httpClient.Do(req)

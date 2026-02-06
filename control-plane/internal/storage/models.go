@@ -438,7 +438,7 @@ func (PermissionApprovalModel) TableName() string { return "permission_approvals
 type DIDDocumentModel struct {
 	DID          string     `gorm:"column:did;primaryKey"`
 	AgentID      string     `gorm:"column:agent_id;not null;index"`
-	DIDDocument  []byte     `gorm:"column:did_document;not null"` // JSONB in PostgreSQL, TEXT in SQLite
+	DIDDocument  []byte     `gorm:"column:did_document;type:jsonb;not null"` // JSONB in PostgreSQL, TEXT in SQLite
 	PublicKeyJWK string     `gorm:"column:public_key_jwk;not null"`
 	RevokedAt    *time.Time `gorm:"column:revoked_at;index"`
 	CreatedAt    time.Time  `gorm:"column:created_at;autoCreateTime"`
