@@ -474,6 +474,28 @@ func (s *DIDService) ResolveDID(did string) (*types.DIDIdentity, error) {
 	return nil, fmt.Errorf("DID not found: %s", did)
 }
 
+// ResolveAgentIDByDID looks up the agent node ID for any DID (including did:key)
+// by searching the in-memory DID registry. Returns empty string if not found.
+func (s *DIDService) ResolveAgentIDByDID(did string) string {
+	if !s.config.Enabled {
+		return ""
+	}
+	agentfieldServerID, err := s.getAgentFieldServerID()
+	if err != nil {
+		return ""
+	}
+	registry, err := s.registry.GetRegistry(agentfieldServerID)
+	if err != nil {
+		return ""
+	}
+	for _, agentInfo := range registry.AgentNodes {
+		if agentInfo.DID == did {
+			return agentInfo.AgentNodeID
+		}
+	}
+	return ""
+}
+
 // generateDIDWithKeys generates a DID with private and public keys from master seed and derivation path.
 func (s *DIDService) generateDIDWithKeys(masterSeed []byte, derivationPath string) (string, string, string, error) {
 	// Derive private key using simplified BIP32-style derivation

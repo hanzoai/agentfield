@@ -196,8 +196,13 @@ func PermissionCheckMiddleware(
 				response["approval_id"] = *check.ApprovalID
 			}
 
-			// Auto-create permission request if enabled
-			if config.AutoRequestOnDeny && check.ApprovalStatus == "" {
+			// Auto-create permission request if enabled.
+			// Also re-request if the previous record was revoked or rejected,
+			// so the admin can re-evaluate. RequestPermission() handles the
+			// revoked/rejected → pending transition via UPDATE (not INSERT).
+			if config.AutoRequestOnDeny && (check.ApprovalStatus == "" ||
+				check.ApprovalStatus == types.PermissionStatusRevoked ||
+				check.ApprovalStatus == types.PermissionStatusRejected) {
 				// Resolve caller agent ID from DID via storage lookup, falling
 				// back to simple did:web parsing when unavailable.
 				callerAgentID := didResolver.ResolveAgentIDByDID(ctx, callerDID)

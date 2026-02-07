@@ -18,7 +18,7 @@ from .types import (
     WebhookConfig,
 )
 from .async_config import AsyncConfig
-from .execution_state import ExecutionStatus
+from .execution_state import ExecuteError, ExecutionStatus
 from .result_cache import ResultCache
 from .async_execution_manager import AsyncExecutionManager
 from .logger import get_logger
@@ -746,7 +746,16 @@ class AgentFieldClient:
             )
         except requests.RequestException as exc:
             raise RuntimeError(f"Failed to submit execution: {exc}") from exc
-        response.raise_for_status()
+        if response.status_code >= 400:
+            try:
+                error_body = response.json()
+            except Exception:
+                error_body = None
+            body_msg = ""
+            if isinstance(error_body, dict):
+                body_msg = error_body.get("message") or error_body.get("error") or ""
+            msg = f"{response.status_code}, {body_msg}" if body_msg else str(response.status_code)
+            raise ExecuteError(response.status_code, msg, error_body)
         body = response.json()
         return self._parse_submission(body, final_headers, target)
 
@@ -778,7 +787,16 @@ class AgentFieldClient:
             headers=final_headers,
             timeout=self.async_config.polling_timeout,
         )
-        response.raise_for_status()
+        if response.status_code >= 400:
+            try:
+                error_body = response.json()
+            except Exception:
+                error_body = None
+            body_msg = ""
+            if isinstance(error_body, dict):
+                body_msg = error_body.get("message") or error_body.get("error") or ""
+            msg = f"{response.status_code}, {body_msg}" if body_msg else str(response.status_code)
+            raise ExecuteError(response.status_code, msg, error_body)
         body = response.json()
         return self._parse_submission(body, final_headers, target)
 
@@ -917,6 +935,7 @@ class AgentFieldClient:
             "completed_at": payload.get("completed_at"),
             "node_id": node_id,
             "error_message": payload.get("error_message") or payload.get("error"),
+            "error_details": payload.get("error_details"),
         }
 
         if metadata.get("completed_at"):
@@ -954,6 +973,8 @@ class AgentFieldClient:
         else:
             response_result = result_value
 
+        error_details = metadata.get("error_details")
+
         response = {
             "execution_id": metadata.get("execution_id"),
             "run_id": metadata.get("run_id"),
@@ -966,6 +987,7 @@ class AgentFieldClient:
             or datetime.datetime.utcnow().isoformat(),
             "result": response_result,
             "error_message": error_message,
+            "error_details": error_details,
             "cost": payload.get("cost"),
         }
 

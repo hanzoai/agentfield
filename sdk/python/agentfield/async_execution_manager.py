@@ -17,7 +17,7 @@ from urllib.parse import urljoin
 import aiohttp
 
 from .async_config import AsyncConfig
-from .execution_state import ExecutionPriority, ExecutionState, ExecutionStatus
+from .execution_state import ExecuteError, ExecutionPriority, ExecutionState, ExecutionStatus
 from .http_connection_manager import ConnectionManager
 from .logger import get_logger
 from .result_cache import ResultCache
@@ -402,7 +402,16 @@ class AsyncExecutionManager:
                     headers=request_headers,
                     timeout=self.config.polling_timeout,
                 )
-                response.raise_for_status()
+                if response.status >= 400:
+                    try:
+                        error_body = await response.json()
+                    except Exception:
+                        error_body = None
+                    body_msg = ""
+                    if isinstance(error_body, dict):
+                        body_msg = error_body.get("message") or error_body.get("error") or ""
+                    msg = f"{response.status}, {body_msg}" if body_msg else str(response.status)
+                    raise ExecuteError(response.status, msg, error_body)
                 result = await response.json()
 
             execution_id = result.get("execution_id")

@@ -1877,9 +1877,11 @@ class Agent(FastAPI):
             }
             log_info(f"Execution {execution_id} completed asynchronously")
         except Exception as exc:
+            error_details = getattr(exc, "error_details", None)
             payload = {
                 "status": "failed",
                 "error": str(exc),
+                "error_details": error_details,
                 "duration_ms": int((time.time() - start_time) * 1000),
                 "completed_at": datetime.now(timezone.utc).isoformat(),
                 "execution_id": execution_id,

@@ -111,6 +111,19 @@ type Reasoner struct {
 	Description  string
 }
 
+// ExecuteError is a structured error from agent-to-agent calls via the control
+// plane. It preserves the HTTP status code and any structured error details
+// (e.g., permission_denied response fields) so callers can inspect them.
+type ExecuteError struct {
+	StatusCode   int
+	Message      string
+	ErrorDetails interface{}
+}
+
+func (e *ExecuteError) Error() string {
+	return e.Message
+}
+
 // Config drives Agent behaviour.
 type Config struct {
 	// NodeID is the unique identifier for this agent node. Required.
@@ -715,6 +728,17 @@ func (a *Agent) handleExecute(w http.ResponseWriter, r *http.Request) {
 	result, err := reasoner.Handler(ctx, input)
 	if err != nil {
 		a.logger.Printf("reasoner %s failed: %v", reasonerName, err)
+		// Propagate structured error details (e.g. from a failed inner Call)
+		// so the control plane can expose them to the original caller.
+		var execErr *ExecuteError
+		if errors.As(err, &execErr) {
+			response := map[string]any{"error": execErr.Message}
+			if execErr.ErrorDetails != nil {
+				response["error_details"] = execErr.ErrorDetails
+			}
+			writeJSON(w, http.StatusInternalServerError, response)
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
@@ -1026,7 +1050,22 @@ func (a *Agent) Call(ctx context.Context, target string, input map[string]any) (
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("execute failed: %s", strings.TrimSpace(string(bodyBytes)))
+		// Try to parse structured error from control plane response.
+		var errResp struct {
+			Error        string      `json:"error"`
+			ErrorDetails interface{} `json:"error_details"`
+		}
+		if json.Unmarshal(bodyBytes, &errResp) == nil && errResp.Error != "" {
+			return nil, &ExecuteError{
+				StatusCode:   resp.StatusCode,
+				Message:      errResp.Error,
+				ErrorDetails: errResp.ErrorDetails,
+			}
+		}
+		return nil, &ExecuteError{
+			StatusCode: resp.StatusCode,
+			Message:    fmt.Sprintf("execute failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes))),
+		}
 	}
 
 	var execResp struct {
@@ -1035,16 +1074,25 @@ func (a *Agent) Call(ctx context.Context, target string, input map[string]any) (
 		Status       string         `json:"status"`
 		Result       map[string]any `json:"result"`
 		ErrorMessage *string        `json:"error_message"`
+		ErrorDetails interface{}    `json:"error_details"`
 	}
 	if err := json.Unmarshal(bodyBytes, &execResp); err != nil {
 		return nil, fmt.Errorf("decode execute response: %w", err)
 	}
 
 	if execResp.ErrorMessage != nil && *execResp.ErrorMessage != "" {
-		return nil, fmt.Errorf("execute error: %s", *execResp.ErrorMessage)
+		return nil, &ExecuteError{
+			StatusCode:   resp.StatusCode,
+			Message:      *execResp.ErrorMessage,
+			ErrorDetails: execResp.ErrorDetails,
+		}
 	}
 	if !strings.EqualFold(execResp.Status, "succeeded") {
-		return nil, fmt.Errorf("execute status %s", execResp.Status)
+		return nil, &ExecuteError{
+			StatusCode:   resp.StatusCode,
+			Message:      fmt.Sprintf("execute status %s", execResp.Status),
+			ErrorDetails: execResp.ErrorDetails,
+		}
 	}
 
 	return execResp.Result, nil

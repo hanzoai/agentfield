@@ -12,6 +12,21 @@ from typing import Any, Dict, Optional, List
 import time
 
 
+class ExecuteError(Exception):
+    """Error from a failed execution HTTP request with structured error details preserved."""
+
+    def __init__(
+        self,
+        status_code: int,
+        message: str,
+        error_details: Optional[Dict[str, Any]] = None,
+    ):
+        self.status_code = status_code
+        self.status = status_code  # Compat with existing getattr(e, "status") checks
+        self.error_details = error_details
+        super().__init__(message)
+
+
 class ExecutionStatus(Enum):
     """Enumeration of possible execution statuses."""
 

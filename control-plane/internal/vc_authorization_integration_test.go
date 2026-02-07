@@ -1436,6 +1436,115 @@ func TestVCAuth_Phase5_EndToEnd_FullPermissionFlow(t *testing.T) {
 		assert.True(t, check2.RequiresPermission, "agent should still be protected")
 		assert.False(t, check2.HasValidApproval, "approval should be invalid after revoke")
 	})
+
+	t.Run("complete flow: revoke then re-request resets to pending and can be re-approved", func(t *testing.T) {
+		// Create unique agents for this test
+		callerID := "re-request-caller"
+		targetID := "re-request-target"
+		tc.createTestAgent(callerID, nil)
+		tc.createTestAgent(targetID, map[string]string{"re-request-protected": "true"})
+
+		// Add protection rule
+		ruleBody := `{"pattern_type": "tag", "pattern": "re-request-protected:true"}`
+		ruleReq := httptest.NewRequest("POST", "/api/v1/admin/protected-agents", strings.NewReader(ruleBody))
+		ruleReq.Header.Set("Content-Type", "application/json")
+		tc.router.ServeHTTP(httptest.NewRecorder(), ruleReq)
+
+		callerDID := tc.didWebService.GenerateDIDWeb(callerID)
+		targetDID := tc.didWebService.GenerateDIDWeb(targetID)
+
+		checkURL := fmt.Sprintf("/api/v1/permissions/check?caller_did=%s&target_did=%s&target_agent_id=%s",
+			url.QueryEscape(callerDID), url.QueryEscape(targetDID), url.QueryEscape(targetID))
+
+		// Step 1: Request permission
+		requestBody := fmt.Sprintf(`{
+			"caller_did": "%s",
+			"target_did": "%s",
+			"caller_agent_id": "%s",
+			"target_agent_id": "%s",
+			"reason": "Initial request"
+		}`, callerDID, targetDID, callerID, targetID)
+		permReq := httptest.NewRequest("POST", "/api/v1/permissions/request", strings.NewReader(requestBody))
+		permReq.Header.Set("Content-Type", "application/json")
+		permReq.Header.Set("X-Caller-DID", callerDID)
+		requestW := httptest.NewRecorder()
+		tc.router.ServeHTTP(requestW, permReq)
+		require.Equal(t, 201, requestW.Code)
+
+		var approval types.PermissionApproval
+		require.NoError(t, json.Unmarshal(requestW.Body.Bytes(), &approval))
+		approvalID := approval.ID
+
+		// Step 2: Approve
+		approveReq := httptest.NewRequest("POST",
+			fmt.Sprintf("/api/v1/admin/permissions/%d/approve", approvalID),
+			strings.NewReader(`{"duration_hours": 24}`))
+		approveReq.Header.Set("Content-Type", "application/json")
+		approveW := httptest.NewRecorder()
+		tc.router.ServeHTTP(approveW, approveReq)
+		require.Equal(t, 200, approveW.Code)
+
+		// Step 3: Revoke
+		revokeReq := httptest.NewRequest("POST",
+			fmt.Sprintf("/api/v1/admin/permissions/%d/revoke", approvalID),
+			strings.NewReader(`{"reason": "Temporary revocation"}`))
+		revokeReq.Header.Set("Content-Type", "application/json")
+		revokeW := httptest.NewRecorder()
+		tc.router.ServeHTTP(revokeW, revokeReq)
+		require.Equal(t, 200, revokeW.Code)
+
+		// Step 4: Re-request (simulates auto-request after revocation)
+		reRequestBody := fmt.Sprintf(`{
+			"caller_did": "%s",
+			"target_did": "%s",
+			"caller_agent_id": "%s",
+			"target_agent_id": "%s",
+			"reason": "Re-requesting after revocation"
+		}`, callerDID, targetDID, callerID, targetID)
+		reReq := httptest.NewRequest("POST", "/api/v1/permissions/request", strings.NewReader(reRequestBody))
+		reReq.Header.Set("Content-Type", "application/json")
+		reReq.Header.Set("X-Caller-DID", callerDID)
+		reRequestW := httptest.NewRecorder()
+		tc.router.ServeHTTP(reRequestW, reReq)
+		require.Equal(t, 201, reRequestW.Code)
+
+		var reRequested types.PermissionApproval
+		require.NoError(t, json.Unmarshal(reRequestW.Body.Bytes(), &reRequested))
+		assert.Equal(t, types.PermissionStatusPending, reRequested.Status, "re-request should reset to pending")
+		assert.Equal(t, approvalID, reRequested.ID, "should reuse the same record ID")
+		assert.Nil(t, reRequested.RevokedBy, "revocation metadata should be cleared")
+		assert.Nil(t, reRequested.RevokedAt, "revocation timestamp should be cleared")
+
+		// Step 5: Check permission (should show pending)
+		checkW := httptest.NewRecorder()
+		tc.router.ServeHTTP(checkW, httptest.NewRequest("GET", checkURL, nil))
+		require.Equal(t, 200, checkW.Code)
+
+		var check types.PermissionCheck
+		require.NoError(t, json.Unmarshal(checkW.Body.Bytes(), &check))
+		assert.True(t, check.RequiresPermission, "agent should be protected")
+		assert.False(t, check.HasValidApproval, "pending approval should not count as valid")
+		assert.Equal(t, types.PermissionStatusPending, check.ApprovalStatus, "status should be pending")
+
+		// Step 6: Re-approve
+		reApproveReq := httptest.NewRequest("POST",
+			fmt.Sprintf("/api/v1/admin/permissions/%d/approve", approvalID),
+			strings.NewReader(`{"duration_hours": 48}`))
+		reApproveReq.Header.Set("Content-Type", "application/json")
+		reApproveW := httptest.NewRecorder()
+		tc.router.ServeHTTP(reApproveW, reApproveReq)
+		require.Equal(t, 200, reApproveW.Code, "re-approval should succeed: %s", reApproveW.Body.String())
+
+		// Step 7: Verify permission is valid again
+		checkW2 := httptest.NewRecorder()
+		tc.router.ServeHTTP(checkW2, httptest.NewRequest("GET", checkURL, nil))
+		require.Equal(t, 200, checkW2.Code)
+
+		var check2 types.PermissionCheck
+		require.NoError(t, json.Unmarshal(checkW2.Body.Bytes(), &check2))
+		assert.True(t, check2.RequiresPermission, "agent should be protected")
+		assert.True(t, check2.HasValidApproval, "re-approved permission should be valid")
+	})
 }
 
 func TestVCAuth_Phase5_EndToEnd_DIDAuthentication(t *testing.T) {

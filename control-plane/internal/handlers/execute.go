@@ -60,6 +60,7 @@ type ExecuteResponse struct {
 	Status            string      `json:"status"`
 	Result            interface{} `json:"result,omitempty"`
 	ErrorMessage      *string     `json:"error_message,omitempty"`
+	ErrorDetails      interface{} `json:"error_details,omitempty"`
 	DurationMS        int64       `json:"duration_ms"`
 	FinishedAt        string      `json:"finished_at"`
 	WebhookRegistered bool        `json:"webhook_registered,omitempty"`
@@ -86,6 +87,7 @@ type ExecutionStatusResponse struct {
 	Status            string                         `json:"status"`
 	Result            interface{}                    `json:"result,omitempty"`
 	Error             *string                        `json:"error,omitempty"`
+	ErrorDetails      interface{}                    `json:"error_details,omitempty"`
 	StartedAt         string                         `json:"started_at"`
 	CompletedAt       *string                        `json:"completed_at,omitempty"`
 	DurationMS        *int64                         `json:"duration_ms,omitempty"`
@@ -260,13 +262,14 @@ func (c *executionController) handleSync(ctx *gin.Context) {
 				RunID:             exec.RunID,
 				Status:            string(exec.Status),
 				ErrorMessage:      &errMsg,
+				ErrorDetails:      decodeJSON(exec.ResultPayload),
 				DurationMS:        durationMS,
 				FinishedAt:        finishedAt,
 				WebhookRegistered: exec.WebhookRegistered,
 			}
 			ctx.Header("X-Execution-ID", exec.ExecutionID)
 			ctx.Header("X-Run-ID", exec.RunID)
-			ctx.JSON(http.StatusOK, response)
+			ctx.JSON(http.StatusBadGateway, response)
 			return
 		}
 
@@ -982,7 +985,11 @@ func (c *executionController) callAgent(ctx context.Context, plan *preparedExecu
 	}
 
 	if resp.StatusCode >= http.StatusBadRequest {
-		return body, time.Since(start), false, fmt.Errorf("agent error (%d): %s", resp.StatusCode, truncateForLog(body))
+		return body, time.Since(start), false, &callError{
+			statusCode: resp.StatusCode,
+			message:    fmt.Sprintf("agent error (%d): %s", resp.StatusCode, truncateForLog(body)),
+			body:       body,
+		}
 	}
 
 	return body, time.Since(start), false, nil
@@ -1326,7 +1333,7 @@ func renderStatus(exec *types.Execution) ExecutionStatusResponse {
 		completedAt = &formatted
 	}
 
-	return ExecutionStatusResponse{
+	resp := ExecutionStatusResponse{
 		ExecutionID:       exec.ExecutionID,
 		RunID:             exec.RunID,
 		Status:            exec.Status,
@@ -1338,6 +1345,12 @@ func renderStatus(exec *types.Execution) ExecutionStatusResponse {
 		WebhookRegistered: exec.WebhookRegistered,
 		WebhookEvents:     exec.WebhookEvents,
 	}
+	// For failed executions, expose the agent's raw response as error_details
+	// so callers can access structured error data (e.g., permission_denied fields).
+	if exec.Status == types.ExecutionStatusFailed && len(exec.ResultPayload) > 0 {
+		resp.ErrorDetails = decodeJSON(exec.ResultPayload)
+	}
+	return resp
 }
 
 func (c *executionController) ensureWorkflowExecutionRecord(ctx context.Context, exec *types.Execution, target *parsedTarget, payload []byte) {
@@ -1487,11 +1500,47 @@ func cloneBytes(src []byte) []byte {
 	return dst
 }
 
+// callError wraps an upstream agent HTTP error, preserving the original status
+// code and response body for structured error propagation.
+type callError struct {
+	statusCode int
+	message    string
+	body       []byte
+}
+
+func (e *callError) Error() string {
+	return e.message
+}
+
 func writeExecutionError(ctx *gin.Context, err error) {
 	if err == nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "unknown error"})
 		return
 	}
+
+	var ce *callError
+	if errors.As(err, &ce) {
+		response := gin.H{
+			"error":  ce.message,
+			"status": "failed",
+		}
+		// Preserve structured error data from the agent's response body.
+		if len(ce.body) > 0 {
+			var parsed interface{}
+			if json.Unmarshal(ce.body, &parsed) == nil {
+				response["error_details"] = parsed
+			}
+		}
+		// Propagate 4xx status codes from the agent (client-facing errors);
+		// use 502 Bad Gateway for 5xx (upstream server failure).
+		httpStatus := http.StatusBadGateway
+		if ce.statusCode >= 400 && ce.statusCode < 500 {
+			httpStatus = ce.statusCode
+		}
+		ctx.JSON(httpStatus, response)
+		return
+	}
+
 	ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 }
 

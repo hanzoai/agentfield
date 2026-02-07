@@ -437,7 +437,9 @@ export class Agent {
       if (err instanceof TargetNotFoundError) {
         res.status(404).json({ error: err.message });
       } else {
-        res.status(500).json({ error: err?.message ?? 'Execution failed' });
+        const body: Record<string, any> = { error: err?.message ?? 'Execution failed' };
+        if (err?.responseData) body.error_details = err.responseData;
+        res.status(500).json(body);
       }
     }
   }
@@ -457,7 +459,9 @@ export class Agent {
       if (err instanceof TargetNotFoundError) {
         res.status(404).json({ error: err.message });
       } else {
-        res.status(500).json({ error: err?.message ?? 'Execution failed' });
+        const body: Record<string, any> = { error: err?.message ?? 'Execution failed' };
+        if (err?.responseData) body.error_details = err.responseData;
+        res.status(500).json(body);
       }
     }
   }
@@ -497,7 +501,9 @@ export class Agent {
       if (err instanceof TargetNotFoundError) {
         res.status(404).json({ error: err.message });
       } else {
-        res.status(500).json({ error: err?.message ?? 'Execution failed' });
+        const body: Record<string, any> = { error: err?.message ?? 'Execution failed' };
+        if (err?.responseData) body.error_details = err.responseData;
+        res.status(500).json(body);
       }
     }
   }
@@ -855,7 +861,9 @@ export class Agent {
         return result;
       } catch (err: any) {
         if (params.respond && params.res) {
-          params.res.status(500).json({ error: err?.message ?? 'Execution failed' });
+          const body: Record<string, any> = { error: err?.message ?? 'Execution failed' };
+          if (err?.responseData) body.error_details = err.responseData;
+          params.res.status(500).json(body);
           return;
         }
         throw err;
@@ -907,7 +915,9 @@ export class Agent {
         return result;
       } catch (err: any) {
         if (params.respond && params.res) {
-          params.res.status(500).json({ error: err?.message ?? 'Execution failed' });
+          const body: Record<string, any> = { error: err?.message ?? 'Execution failed' };
+          if (err?.responseData) body.error_details = err.responseData;
+          params.res.status(500).json(body);
           return;
         }
         throw err;

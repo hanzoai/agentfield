@@ -11,8 +11,9 @@ from agentfield.execution_state import ExecutionState, ExecutionStatus
 
 
 class _DummyResponse:
-    def __init__(self, payload):
+    def __init__(self, payload, status=200):
         self._payload = payload
+        self.status = status
 
     def raise_for_status(self):
         return None

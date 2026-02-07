@@ -108,11 +108,15 @@ func TestExecuteHandler_AgentError(t *testing.T) {
 
 	router.ServeHTTP(resp, req)
 
-	require.Equal(t, http.StatusBadRequest, resp.Code)
+	// Agent returned 500 → control plane returns 502 Bad Gateway with structured error details.
+	require.Equal(t, http.StatusBadGateway, resp.Code)
 
-	var payload map[string]string
+	var payload map[string]interface{}
 	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &payload))
 	require.Contains(t, payload["error"], "agent error (500)")
+	require.Equal(t, "failed", payload["status"])
+	// The agent's JSON response body is preserved as error_details.
+	require.NotNil(t, payload["error_details"])
 
 	records, err := store.QueryExecutionRecords(context.Background(), types.ExecutionFilter{})
 	require.NoError(t, err)

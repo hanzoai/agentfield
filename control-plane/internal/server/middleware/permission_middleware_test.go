@@ -120,6 +120,10 @@ func signRequestBody(body []byte, did string, privateKey ed25519.PrivateKey, ts 
 }
 
 func setupProtectedRoute(permissionService PermissionServiceInterface, didService DIDWebServiceInterface, resolver AgentResolverInterface) *gin.Engine {
+	return setupProtectedRouteWithConfig(permissionService, didService, resolver, PermissionConfig{Enabled: true})
+}
+
+func setupProtectedRouteWithConfig(permissionService PermissionServiceInterface, didService DIDWebServiceInterface, resolver AgentResolverInterface, config PermissionConfig) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.Use(DIDAuthMiddleware(didService, DIDAuthConfig{
@@ -133,7 +137,7 @@ func setupProtectedRoute(permissionService PermissionServiceInterface, didServic
 		permissionService,
 		resolver,
 		&testDIDResolver{},
-		PermissionConfig{Enabled: true},
+		config,
 	))
 	router.POST("/api/v1/execute/:target", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
@@ -249,4 +253,142 @@ func TestProtectedRoute_TargetResolutionErrorDenied(t *testing.T) {
 
 	assert.Equal(t, http.StatusForbidden, w.Code)
 	assert.Contains(t, w.Body.String(), "target_resolution_failed")
+}
+
+func TestAutoRequestOnDeny_RevokedPermission(t *testing.T) {
+	publicKey, privateKey, _ := ed25519.GenerateKey(nil)
+	did := "did:web:localhost%3A8080:agents:caller"
+	didService := &testDIDWebService{publicKeys: map[string]ed25519.PublicKey{did: publicKey}}
+
+	revokedID := int64(42)
+	requestCalled := false
+
+	perm := &testPermissionService{
+		isEnabled:     true,
+		protectedTags: map[string]struct{}{"admin": {}},
+		checkFn: func(_ context.Context, _, _, _ string, _ []string) (*types.PermissionCheck, error) {
+			return &types.PermissionCheck{
+				RequiresPermission: true,
+				HasValidApproval:   false,
+				ApprovalStatus:     types.PermissionStatusRevoked,
+				ApprovalID:         &revokedID,
+			}, nil
+		},
+		requestFn: func(_ context.Context, req *types.PermissionRequest) (*types.PermissionApproval, error) {
+			requestCalled = true
+			return &types.PermissionApproval{
+				ID:     revokedID,
+				Status: types.PermissionStatusPending,
+			}, nil
+		},
+	}
+	router := setupProtectedRouteWithConfig(perm, didService, nil, PermissionConfig{
+		Enabled:           true,
+		AutoRequestOnDeny: true,
+	})
+
+	body := []byte(`{"x":1}`)
+	headers, _ := signRequestBody(body, did, privateKey, time.Now())
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/protected-agent.reasoner", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.True(t, requestCalled, "RequestPermission should be called for revoked permissions")
+	assert.Contains(t, w.Body.String(), "pending")
+}
+
+func TestAutoRequestOnDeny_RejectedPermission(t *testing.T) {
+	publicKey, privateKey, _ := ed25519.GenerateKey(nil)
+	did := "did:web:localhost%3A8080:agents:caller"
+	didService := &testDIDWebService{publicKeys: map[string]ed25519.PublicKey{did: publicKey}}
+
+	rejectedID := int64(7)
+	requestCalled := false
+
+	perm := &testPermissionService{
+		isEnabled:     true,
+		protectedTags: map[string]struct{}{"admin": {}},
+		checkFn: func(_ context.Context, _, _, _ string, _ []string) (*types.PermissionCheck, error) {
+			return &types.PermissionCheck{
+				RequiresPermission: true,
+				HasValidApproval:   false,
+				ApprovalStatus:     types.PermissionStatusRejected,
+				ApprovalID:         &rejectedID,
+			}, nil
+		},
+		requestFn: func(_ context.Context, req *types.PermissionRequest) (*types.PermissionApproval, error) {
+			requestCalled = true
+			return &types.PermissionApproval{
+				ID:     rejectedID,
+				Status: types.PermissionStatusPending,
+			}, nil
+		},
+	}
+	router := setupProtectedRouteWithConfig(perm, didService, nil, PermissionConfig{
+		Enabled:           true,
+		AutoRequestOnDeny: true,
+	})
+
+	body := []byte(`{"x":1}`)
+	headers, _ := signRequestBody(body, did, privateKey, time.Now())
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/protected-agent.reasoner", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.True(t, requestCalled, "RequestPermission should be called for rejected permissions")
+	assert.Contains(t, w.Body.String(), "pending")
+}
+
+func TestAutoRequestOnDeny_ApprovedStatusNotReRequested(t *testing.T) {
+	publicKey, privateKey, _ := ed25519.GenerateKey(nil)
+	did := "did:web:localhost%3A8080:agents:caller"
+	didService := &testDIDWebService{publicKeys: map[string]ed25519.PublicKey{did: publicKey}}
+
+	requestCalled := false
+
+	perm := &testPermissionService{
+		isEnabled:     true,
+		protectedTags: map[string]struct{}{"admin": {}},
+		checkFn: func(_ context.Context, _, _, _ string, _ []string) (*types.PermissionCheck, error) {
+			// Expired approval: status is approved but HasValidApproval is false
+			approvedID := int64(99)
+			return &types.PermissionCheck{
+				RequiresPermission: true,
+				HasValidApproval:   false,
+				ApprovalStatus:     types.PermissionStatusApproved,
+				ApprovalID:         &approvedID,
+			}, nil
+		},
+		requestFn: func(_ context.Context, _ *types.PermissionRequest) (*types.PermissionApproval, error) {
+			requestCalled = true
+			return nil, nil
+		},
+	}
+	router := setupProtectedRouteWithConfig(perm, didService, nil, PermissionConfig{
+		Enabled:           true,
+		AutoRequestOnDeny: true,
+	})
+
+	body := []byte(`{"x":1}`)
+	headers, _ := signRequestBody(body, did, privateKey, time.Now())
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/protected-agent.reasoner", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.False(t, requestCalled, "RequestPermission should NOT be called for approved (expired) permissions")
 }

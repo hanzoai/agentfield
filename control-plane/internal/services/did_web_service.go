@@ -46,14 +46,21 @@ func (s *DIDWebService) GenerateDIDWeb(agentID string) string {
 	return fmt.Sprintf("did:web:%s:agents:%s", encodedDomain, agentID)
 }
 
-// ResolveAgentIDByDID looks up the agent ID for any DID format by querying
-// the stored DID documents. Returns empty string if the DID is not found.
+// ResolveAgentIDByDID looks up the agent ID for any DID format.
+// It first queries the stored DID documents (covers did:web), then falls back
+// to the DID service's in-memory registry (covers did:key).
+// Returns empty string if the DID is not found.
 func (s *DIDWebService) ResolveAgentIDByDID(ctx context.Context, did string) string {
+	// Try storage lookup first (works for did:web)
 	record, err := s.storage.GetDIDDocument(ctx, did)
-	if err != nil || record == nil {
-		return ""
+	if err == nil && record != nil {
+		return record.AgentID
 	}
-	return record.AgentID
+	// Fall back to DID service registry (works for did:key)
+	if s.didService != nil {
+		return s.didService.ResolveAgentIDByDID(did)
+	}
+	return ""
 }
 
 // ParseDIDWeb extracts the agent ID from a did:web identifier.
