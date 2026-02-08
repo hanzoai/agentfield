@@ -272,6 +272,10 @@ func DIDAuthMiddleware(didService DIDWebServiceInterface, config DIDAuthConfig) 
 		}
 
 		if !valid {
+			logger.Logger.Warn().
+				Str("caller_did", callerDID).
+				Str("path", c.Request.URL.Path).
+				Msg("DID signature verification failed")
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error":   "invalid_signature",
 				"message": "DID signature verification failed",

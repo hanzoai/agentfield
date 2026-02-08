@@ -83,6 +83,8 @@ features:
       timestamp_window_seconds: 300
       default_approval_duration_hours: 24
       auto_request_on_deny: true
+      admin_token: "admin-secret"
+      internal_token: "internal-secret-token"
       protected_agents:
         - pattern_type: "tag"
           pattern: "sensitive"

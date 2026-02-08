@@ -13,57 +13,14 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"os"
 	"strings"
 
 	"github.com/Agent-Field/agentfield/sdk/go/agent"
 )
-
-// registerDID calls the control plane DID register API to obtain DID credentials.
-// This mirrors what the Python SDK does automatically during startup.
-func registerDID(agentFieldURL, nodeID string) (did string, privateKeyJWK string, err error) {
-	payload, _ := json.Marshal(map[string]any{
-		"agent_node_id": nodeID,
-		"reasoners":     []any{},
-		"skills":        []any{},
-	})
-
-	resp, err := http.Post(agentFieldURL+"/api/v1/did/register", "application/json", bytes.NewReader(payload))
-	if err != nil {
-		return "", "", fmt.Errorf("DID register request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 {
-		return "", "", fmt.Errorf("DID register returned %d: %s", resp.StatusCode, body)
-	}
-
-	var result struct {
-		Success         bool `json:"success"`
-		IdentityPackage struct {
-			AgentDID struct {
-				DID           string `json:"did"`
-				PrivateKeyJWK string `json:"private_key_jwk"`
-			} `json:"agent_did"`
-		} `json:"identity_package"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return "", "", fmt.Errorf("failed to parse DID register response: %w", err)
-	}
-	if !result.Success {
-		return "", "", fmt.Errorf("DID registration failed")
-	}
-
-	return result.IdentityPackage.AgentDID.DID, result.IdentityPackage.AgentDID.PrivateKeyJWK, nil
-}
 
 func main() {
 	agentFieldURL := strings.TrimSpace(os.Getenv("AGENTFIELD_URL"))
@@ -81,25 +38,17 @@ func main() {
 		publicURL = "http://localhost" + listenAddr
 	}
 
-	nodeID := "go-perm-caller"
-
-	// Auto-provision DID credentials from the control plane
-	did, privateKeyJWK, err := registerDID(agentFieldURL, nodeID)
-	if err != nil {
-		log.Printf("WARNING: DID registration failed: %v (running without DID auth)", err)
-	} else {
-		fmt.Printf("DID: %s\n", did)
-	}
-
 	cfg := agent.Config{
-		NodeID:        nodeID,
-		Version:       "1.0.0",
-		AgentFieldURL: agentFieldURL,
-		Token:         os.Getenv("AGENTFIELD_TOKEN"),
-		ListenAddress: listenAddr,
-		PublicURL:     publicURL,
-		DID:           did,
-		PrivateKeyJWK: privateKeyJWK,
+		NodeID:            "go-perm-caller",
+		Version:           "1.0.0",
+		AgentFieldURL:     agentFieldURL,
+		Token:             os.Getenv("AGENTFIELD_TOKEN"),
+		InternalToken:     os.Getenv("AGENTFIELD_INTERNAL_TOKEN"),
+		ListenAddress:     listenAddr,
+		PublicURL:         publicURL,
+		EnableDID:         true, // Auto-register DID during Initialize()
+		VCEnabled:         true, // Generate VCs for audit trail
+		RequireOriginAuth: true, // Only the control plane can invoke reasoners
 	}
 
 	a, err := agent.New(cfg)
@@ -115,6 +64,7 @@ func main() {
 		}, nil
 	},
 		agent.WithDescription("Simple health check"),
+		agent.WithVCEnabled(false), // No VC needed for health checks
 	)
 
 	// Calls go-perm-target.query_data through the control plane.

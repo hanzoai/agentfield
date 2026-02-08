@@ -103,6 +103,10 @@ type AuthorizationConfig struct {
 	AdminToken string `yaml:"admin_token" mapstructure:"admin_token"`
 	// ProtectedAgents defines which agents require permission to call (seeded at startup)
 	ProtectedAgents []ProtectedAgentConfig `yaml:"protected_agents" mapstructure:"protected_agents"`
+	// InternalToken is sent as Authorization: Bearer header when the control plane
+	// forwards execution requests to agents. Agents with RequireOriginAuth enabled
+	// validate this token, preventing direct access to their HTTP ports.
+	InternalToken string `yaml:"internal_token" mapstructure:"internal_token"`
 }
 
 // ProtectedAgentConfig defines a rule for protecting agents.
@@ -255,5 +259,8 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if val := os.Getenv("AGENTFIELD_AUTHORIZATION_ADMIN_TOKEN"); val != "" {
 		cfg.Features.DID.Authorization.AdminToken = val
+	}
+	if val := os.Getenv("AGENTFIELD_AUTHORIZATION_INTERNAL_TOKEN"); val != "" {
+		cfg.Features.DID.Authorization.InternalToken = val
 	}
 }

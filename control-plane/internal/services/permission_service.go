@@ -358,8 +358,18 @@ func (s *PermissionService) GeneratePermissionVC(ctx context.Context, approval *
 		return nil, fmt.Errorf("cannot generate VC for non-approved permission")
 	}
 
-	// Get the control plane's issuer DID
-	issuerDID := s.didWebService.GenerateDIDWeb("agentfield")
+	// Get the control plane's issuer DID. Prefer the root DID (did:key format)
+	// because it is resolvable by ResolveDID() and enables Ed25519 signing.
+	// Fall back to did:web if the DID system hasn't fully initialized.
+	var issuerDID string
+	if s.vcService != nil {
+		if rootDID, err := s.vcService.GetDIDService().GetControlPlaneIssuerDID(); err == nil {
+			issuerDID = rootDID
+		}
+	}
+	if issuerDID == "" {
+		issuerDID = s.didWebService.GenerateDIDWeb("agentfield")
+	}
 
 	// Create the VC document
 	vcID := fmt.Sprintf("urn:agentfield:permission-vc:%s", uuid.New().String())

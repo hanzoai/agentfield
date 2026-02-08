@@ -269,6 +269,16 @@ func (c *Client) DID() string {
 	return c.didAuthenticator.DID()
 }
 
+// SignBody returns DID authentication headers for the given request body.
+// Returns nil if DID auth is not configured. This is used by the DID client
+// to sign VC generation and other authenticated requests.
+func (c *Client) SignBody(body []byte) map[string]string {
+	if c == nil || c.didAuthenticator == nil || !c.didAuthenticator.IsConfigured() {
+		return nil
+	}
+	return c.didAuthenticator.SignRequest(body)
+}
+
 // APIError captures non-success responses from the AgentField API.
 type APIError struct {
 	StatusCode int

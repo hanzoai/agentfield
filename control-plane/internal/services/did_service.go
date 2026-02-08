@@ -99,6 +99,27 @@ func (s *DIDService) getAgentFieldServerID() (string, error) {
 	return s.GetAgentFieldServerID()
 }
 
+// GetControlPlaneIssuerDID returns the root DID (did:key format) for the
+// control plane, suitable for signing VCs. This DID is resolvable via
+// ResolveDID(), unlike the did:web URI returned by GenerateDIDWeb().
+func (s *DIDService) GetControlPlaneIssuerDID() (string, error) {
+	if !s.config.Enabled {
+		return "", fmt.Errorf("DID system is disabled")
+	}
+	agentfieldServerID, err := s.getAgentFieldServerID()
+	if err != nil {
+		return "", err
+	}
+	registry, err := s.registry.GetRegistry(agentfieldServerID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get DID registry: %w", err)
+	}
+	if registry.RootDID == "" {
+		return "", fmt.Errorf("root DID not initialized")
+	}
+	return registry.RootDID, nil
+}
+
 // validateAgentFieldServerRegistry ensures that the af server registry exists before operations.
 func (s *DIDService) validateAgentFieldServerRegistry() error {
 	agentfieldServerID, err := s.getAgentFieldServerID()

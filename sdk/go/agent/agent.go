@@ -20,6 +20,7 @@ import (
 
 	"github.com/Agent-Field/agentfield/sdk/go/ai"
 	"github.com/Agent-Field/agentfield/sdk/go/client"
+	"github.com/Agent-Field/agentfield/sdk/go/did"
 	"github.com/Agent-Field/agentfield/sdk/go/types"
 )
 
@@ -39,6 +40,11 @@ type ExecutionContext struct {
 	AgentNodeID       string
 	ReasonerName      string
 	StartedAt         time.Time
+
+	// DID fields — populated when DID authentication is enabled.
+	CallerDID    string
+	TargetDID    string
+	AgentNodeDID string
 }
 
 func init() {
@@ -109,6 +115,17 @@ type Reasoner struct {
 	DefaultCLI   bool
 	CLIFormatter func(context.Context, any, error)
 	Description  string
+
+	// VCEnabled overrides the agent-level VCEnabled setting for this reasoner.
+	// nil = inherit agent setting, true/false = override.
+	VCEnabled *bool
+}
+
+// WithVCEnabled overrides VC generation for this specific reasoner.
+func WithVCEnabled(enabled bool) ReasonerOption {
+	return func(r *Reasoner) {
+		r.VCEnabled = &enabled
+	}
 }
 
 // ExecuteError is a structured error from agent-to-agent calls via the control
@@ -195,12 +212,47 @@ type Config struct {
 
 	// DID is the agent's decentralized identifier for DID authentication.
 	// Optional. If set along with PrivateKeyJWK, enables DID auth on
-	// all control plane requests.
+	// all control plane requests without auto-registration.
 	DID string
 
 	// PrivateKeyJWK is the JWK-formatted Ed25519 private key for signing
 	// DID-authenticated requests. Optional. Must be set together with DID.
 	PrivateKeyJWK string
+
+	// EnableDID enables automatic DID registration during Initialize().
+	// The agent registers with the control plane's DID service to obtain
+	// a cryptographic identity (Ed25519 keys and DID). DID authentication
+	// is then applied to all subsequent control plane requests.
+	// If DID and PrivateKeyJWK are already set, registration is skipped.
+	// Optional. Default: false.
+	EnableDID bool
+
+	// VCEnabled enables Verifiable Credential generation after each execution.
+	// Requires DID authentication (either EnableDID or DID/PrivateKeyJWK).
+	// When enabled, the agent generates a W3C Verifiable Credential for each
+	// reasoner execution and stores it on the control plane for audit trails.
+	// Optional. Default: false.
+	VCEnabled bool
+
+	// Tags are metadata labels attached to the agent during registration.
+	// Used by the control plane for protection rules (e.g., agents tagged
+	// "sensitive" require permission for cross-agent calls).
+	// Optional. Default: nil.
+	Tags []string
+
+	// InternalToken is validated on incoming requests when RequireOriginAuth
+	// is true. The control plane sends this token as Authorization: Bearer
+	// when forwarding execution requests. If empty, Token is used instead.
+	// Optional. Default: "" (falls back to Token).
+	InternalToken string
+
+	// RequireOriginAuth when true, validates that incoming execution
+	// requests include an Authorization header matching InternalToken
+	// (or Token if InternalToken is empty). This ensures only the
+	// control plane can invoke reasoners, blocking direct access to the
+	// agent's HTTP port. /health and /discover endpoints remain open.
+	// Optional. Default: false.
+	RequireOriginAuth bool
 }
 
 // CLIConfig controls CLI behaviour and presentation.
@@ -223,6 +275,10 @@ type Agent struct {
 	reasoners  map[string]*Reasoner
 	aiClient   *ai.Client // AI/LLM client
 	memory     *Memory    // Memory system for state management
+
+	// DID/VC subsystem
+	didManager  *did.Manager
+	vcGenerator *did.VCGenerator
 
 	serverMu sync.RWMutex
 	server   *http.Server
@@ -352,6 +408,9 @@ func (ec ExecutionContext) ChildContext(agentNodeID, reasonerName string) Execut
 		AgentNodeID:       agentNodeID,
 		ReasonerName:      reasonerName,
 		StartedAt:         time.Now(),
+		CallerDID:         ec.CallerDID,
+		TargetDID:         ec.TargetDID,
+		AgentNodeDID:      ec.AgentNodeDID,
 	}
 }
 
@@ -445,6 +504,13 @@ func (a *Agent) Initialize(ctx context.Context) error {
 		return fmt.Errorf("register node: %w", err)
 	}
 
+	// Auto-register DIDs if enabled and not already configured.
+	if a.cfg.EnableDID || a.cfg.VCEnabled {
+		if err := a.initializeDIDSystem(ctx); err != nil {
+			a.logger.Printf("warn: DID initialization failed: %v (continuing without DID)", err)
+		}
+	}
+
 	if err := a.markReady(ctx); err != nil {
 		a.logger.Printf("warn: initial status update failed: %v", err)
 	}
@@ -525,6 +591,7 @@ func (a *Agent) registerNode(ctx context.Context) error {
 			"sdk": map[string]any{
 				"language": "go",
 			},
+			"tags": a.cfg.Tags,
 		},
 		Features:       map[string]any{},
 		DeploymentType: a.cfg.DeploymentType,
@@ -642,9 +709,41 @@ func (a *Agent) handler() http.Handler {
 		mux.HandleFunc("/execute", a.handleExecute)
 		mux.HandleFunc("/execute/", a.handleExecute)
 		mux.HandleFunc("/reasoners/", a.handleReasoner)
-		a.router = mux
+
+		originToken := a.cfg.InternalToken
+		if originToken == "" {
+			originToken = a.cfg.Token
+		}
+		if a.cfg.RequireOriginAuth && originToken != "" {
+			a.router = a.originAuthMiddleware(mux, originToken)
+		} else {
+			a.router = mux
+		}
 	})
 	return a.router
+}
+
+// originAuthMiddleware validates that incoming requests to execute/reasoner
+// endpoints include an Authorization header matching the expected token.
+// Health and discovery endpoints are exempt.
+func (a *Agent) originAuthMiddleware(next http.Handler, token string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if path == "/health" || path == "/discover" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		expected := "Bearer " + token
+		if r.Header.Get("Authorization") != expected {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"error":"unauthorized","message":"valid Authorization header required"}`))
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (a *Agent) healthHandler(w http.ResponseWriter, r *http.Request) {
@@ -723,11 +822,16 @@ func (a *Agent) handleExecute(w http.ResponseWriter, r *http.Request) {
 
 	input := extractInputFromServerless(payload)
 	execCtx := a.buildExecutionContextFromServerless(r, payload, reasonerName)
+	a.fillDIDContext(&execCtx)
 	ctx := contextWithExecution(r.Context(), execCtx)
 
+	start := time.Now()
 	result, err := reasoner.Handler(ctx, input)
+	durationMS := time.Since(start).Milliseconds()
+
 	if err != nil {
 		a.logger.Printf("reasoner %s failed: %v", reasonerName, err)
+		a.maybeGenerateVC(execCtx, input, nil, "failed", err.Error(), durationMS, reasoner)
 		// Propagate structured error details (e.g. from a failed inner Call)
 		// so the control plane can expose them to the original caller.
 		var execErr *ExecuteError
@@ -743,6 +847,7 @@ func (a *Agent) handleExecute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	a.maybeGenerateVC(execCtx, input, result, "succeeded", "", durationMS, reasoner)
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -781,6 +886,9 @@ func (a *Agent) buildExecutionContextFromServerless(r *http.Request, payload map
 		AgentNodeID:       a.cfg.NodeID,
 		ReasonerName:      reasonerName,
 		StartedAt:         time.Now(),
+		CallerDID:         strings.TrimSpace(r.Header.Get("X-Caller-DID")),
+		TargetDID:         strings.TrimSpace(r.Header.Get("X-Target-DID")),
+		AgentNodeDID:      strings.TrimSpace(r.Header.Get("X-Agent-Node-DID")),
 	}
 
 	if ctxMap, ok := payload["execution_context"].(map[string]any); ok {
@@ -858,6 +966,9 @@ func (a *Agent) handleReasoner(w http.ResponseWriter, r *http.Request) {
 		AgentNodeID:       a.cfg.NodeID,
 		ReasonerName:      name,
 		StartedAt:         time.Now(),
+		CallerDID:         r.Header.Get("X-Caller-DID"),
+		TargetDID:         r.Header.Get("X-Target-DID"),
+		AgentNodeDID:      r.Header.Get("X-Agent-Node-DID"),
 	}
 	if execCtx.WorkflowID == "" {
 		execCtx.WorkflowID = execCtx.RunID
@@ -865,6 +976,7 @@ func (a *Agent) handleReasoner(w http.ResponseWriter, r *http.Request) {
 	if execCtx.RootWorkflowID == "" {
 		execCtx.RootWorkflowID = execCtx.WorkflowID
 	}
+	a.fillDIDContext(&execCtx)
 
 	ctx := contextWithExecution(r.Context(), execCtx)
 
@@ -881,9 +993,13 @@ func (a *Agent) handleReasoner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	start := time.Now()
 	result, err := reasoner.Handler(ctx, input)
+	durationMS := time.Since(start).Milliseconds()
+
 	if err != nil {
 		a.logger.Printf("reasoner %s failed: %v", name, err)
+		a.maybeGenerateVC(execCtx, input, nil, "failed", err.Error(), durationMS, reasoner)
 		response := map[string]any{
 			"error": err.Error(),
 		}
@@ -891,6 +1007,7 @@ func (a *Agent) handleReasoner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	a.maybeGenerateVC(execCtx, input, result, "succeeded", "", durationMS, reasoner)
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -901,15 +1018,17 @@ func (a *Agent) executeReasonerAsync(reasoner *Reasoner, input map[string]any, e
 	defer func() {
 		if rec := recover(); rec != nil {
 			errMsg := fmt.Sprintf("panic: %v", rec)
+			durationMS := time.Since(start).Milliseconds()
 			payload := map[string]any{
 				"status":        "failed",
 				"error":         errMsg,
 				"execution_id":  execCtx.ExecutionID,
 				"run_id":        execCtx.RunID,
 				"completed_at":  time.Now().UTC().Format(time.RFC3339),
-				"duration_ms":   time.Since(start).Milliseconds(),
+				"duration_ms":   durationMS,
 				"reasoner_name": reasoner.Name,
 			}
+			a.maybeGenerateVC(execCtx, input, nil, "failed", errMsg, durationMS, reasoner)
 			if err := a.sendExecutionStatus(execCtx.ExecutionID, payload); err != nil {
 				a.logger.Printf("failed to send panic status: %v", err)
 			}
@@ -917,20 +1036,23 @@ func (a *Agent) executeReasonerAsync(reasoner *Reasoner, input map[string]any, e
 	}()
 
 	result, err := reasoner.Handler(ctx, input)
+	durationMS := time.Since(start).Milliseconds()
 	payload := map[string]any{
 		"execution_id":  execCtx.ExecutionID,
 		"run_id":        execCtx.RunID,
 		"completed_at":  time.Now().UTC().Format(time.RFC3339),
-		"duration_ms":   time.Since(start).Milliseconds(),
+		"duration_ms":   durationMS,
 		"reasoner_name": reasoner.Name,
 	}
 
 	if err != nil {
 		payload["status"] = "failed"
 		payload["error"] = err.Error()
+		a.maybeGenerateVC(execCtx, input, nil, "failed", err.Error(), durationMS, reasoner)
 	} else {
 		payload["status"] = "succeeded"
 		payload["result"] = result
+		a.maybeGenerateVC(execCtx, input, result, "succeeded", "", durationMS, reasoner)
 	}
 
 	if err := a.sendExecutionStatus(execCtx.ExecutionID, payload); err != nil {
@@ -961,6 +1083,11 @@ func (a *Agent) postExecutionStatus(ctx context.Context, callbackURL string, pay
 			return fmt.Errorf("create status request: %w", err)
 		}
 		req.Header.Set("Content-Type", "application/json")
+
+		// Include API auth headers (Bearer token / API key)
+		if a.cfg.Token != "" {
+			req.Header.Set("Authorization", "Bearer "+a.cfg.Token)
+		}
 
 		// Sign request with DID auth headers if configured
 		if a.client != nil {
@@ -1028,6 +1155,13 @@ func (a *Agent) Call(ctx context.Context, target string, input map[string]any) (
 	}
 	if execCtx.ActorID != "" {
 		req.Header.Set("X-Actor-ID", execCtx.ActorID)
+	}
+	// DID metadata headers for execution context propagation.
+	if a.didManager != nil && a.didManager.IsRegistered() {
+		req.Header.Set("X-Agent-Node-DID", a.didManager.GetAgentDID())
+	}
+	if execCtx.AgentNodeDID != "" {
+		req.Header.Set("X-Agent-Node-DID", execCtx.AgentNodeDID)
 	}
 	if a.cfg.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+a.cfg.Token)
@@ -1353,4 +1487,135 @@ func ExecutionContextFrom(ctx context.Context) ExecutionContext {
 //	agent.Memory().GlobalScope().Set(ctx, "shared_key", data)
 func (a *Agent) Memory() *Memory {
 	return a.memory
+}
+
+// DIDManager returns the agent's DID manager, or nil if DID is not enabled.
+func (a *Agent) DIDManager() *did.Manager {
+	return a.didManager
+}
+
+// VCGenerator returns the agent's VC generator, or nil if VC generation is not enabled.
+func (a *Agent) VCGenerator() *did.VCGenerator {
+	return a.vcGenerator
+}
+
+// initializeDIDSystem sets up DID registration and VC generation.
+// If DID/PrivateKeyJWK are already configured, it skips auto-registration
+// but still sets up the DID manager and VC generator.
+func (a *Agent) initializeDIDSystem(ctx context.Context) error {
+	// Create DID HTTP client for DID endpoints.
+	didClientOpts := []did.ClientOption{did.WithHTTPClient(a.httpClient)}
+	if a.cfg.Token != "" {
+		didClientOpts = append(didClientOpts, did.WithToken(a.cfg.Token))
+	}
+	didClient := did.NewClient(a.cfg.AgentFieldURL, didClientOpts...)
+
+	// Create DID manager.
+	mgr := did.NewManager(didClient, a.logger)
+
+	if a.cfg.DID != "" && a.cfg.PrivateKeyJWK != "" {
+		// Agent already has credentials — skip registration, just populate the manager.
+		mgr.SetIdentityFromCredentials(a.cfg.DID, a.cfg.PrivateKeyJWK)
+	} else {
+		// Auto-register with the control plane's DID service.
+		reasonerNames := make([]string, 0, len(a.reasoners))
+		for name := range a.reasoners {
+			reasonerNames = append(reasonerNames, name)
+		}
+
+		if err := mgr.RegisterAgent(ctx, a.cfg.NodeID, reasonerNames, nil); err != nil {
+			return fmt.Errorf("DID registration: %w", err)
+		}
+
+		// Wire the new credentials into the HTTP client.
+		agentDID := mgr.GetAgentDID()
+		privateKey := mgr.GetAgentPrivateKeyJWK()
+		if agentDID != "" && privateKey != "" {
+			if err := a.client.SetDIDCredentials(agentDID, privateKey); err != nil {
+				return fmt.Errorf("set DID credentials: %w", err)
+			}
+			// Update config so Call() and other paths can see the DID.
+			a.cfg.DID = agentDID
+			a.cfg.PrivateKeyJWK = privateKey
+		}
+	}
+
+	a.didManager = mgr
+
+	// Wire the sign function on the DID client so VC generation requests are DID-signed.
+	didClient.SetSignFunc(func(body []byte) map[string]string {
+		if a.client == nil {
+			return nil
+		}
+		return a.client.SignBody(body)
+	})
+
+	// Set up VC generator if enabled and DID auth is configured.
+	if a.cfg.VCEnabled && a.client != nil && a.client.DIDAuthConfigured() {
+		gen := did.NewVCGenerator(didClient, mgr, a.logger)
+		gen.SetEnabled(true)
+		a.vcGenerator = gen
+		a.logger.Printf("VC generation enabled")
+	}
+
+	return nil
+}
+
+// fillDIDContext populates DID fields on an execution context from the agent's
+// DID manager, if available and not already set from headers.
+func (a *Agent) fillDIDContext(ec *ExecutionContext) {
+	if a.didManager == nil || !a.didManager.IsRegistered() {
+		return
+	}
+	if ec.AgentNodeDID == "" {
+		ec.AgentNodeDID = a.didManager.GetAgentDID()
+	}
+}
+
+// maybeGenerateVC fires a background VC generation request if the agent and
+// reasoner configuration allow it.
+func (a *Agent) maybeGenerateVC(
+	execCtx ExecutionContext,
+	input any,
+	output any,
+	status string,
+	errMsg string,
+	durationMS int64,
+	reasoner *Reasoner,
+) {
+	if !a.shouldGenerateVC(reasoner) {
+		return
+	}
+
+	didExecCtx := did.ExecutionContext{
+		ExecutionID:  execCtx.ExecutionID,
+		WorkflowID:   execCtx.WorkflowID,
+		SessionID:    execCtx.SessionID,
+		CallerDID:    execCtx.CallerDID,
+		TargetDID:    execCtx.TargetDID,
+		AgentNodeDID: execCtx.AgentNodeDID,
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if _, err := a.vcGenerator.GenerateExecutionVC(ctx, didExecCtx, input, output, status, errMsg, durationMS); err != nil {
+			a.logger.Printf("VC generation failed for %s: %v", execCtx.ExecutionID, err)
+		}
+	}()
+}
+
+// shouldGenerateVC checks agent-level and reasoner-level VC settings.
+func (a *Agent) shouldGenerateVC(reasoner *Reasoner) bool {
+	if a.vcGenerator == nil || !a.vcGenerator.IsEnabled() {
+		return false
+	}
+	if a.didManager == nil || !a.didManager.IsRegistered() {
+		return false
+	}
+	// Per-reasoner override takes precedence.
+	if reasoner != nil && reasoner.VCEnabled != nil {
+		return *reasoner.VCEnabled
+	}
+	return true
 }

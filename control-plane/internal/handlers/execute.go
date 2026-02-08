@@ -18,6 +18,7 @@ import (
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/events"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
 	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/internal/utils"
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
@@ -113,12 +114,13 @@ type executionStatusUpdateRequest struct {
 }
 
 type executionController struct {
-	store      ExecutionStore
-	httpClient *http.Client
-	payloads   services.PayloadStore
-	webhooks   services.WebhookDispatcher
-	eventBus   *events.ExecutionEventBus
-	timeout    time.Duration
+	store         ExecutionStore
+	httpClient    *http.Client
+	payloads      services.PayloadStore
+	webhooks      services.WebhookDispatcher
+	eventBus      *events.ExecutionEventBus
+	timeout       time.Duration
+	internalToken string // sent as Authorization header when forwarding to agents
 }
 
 type asyncExecutionJob struct {
@@ -154,36 +156,36 @@ const (
 )
 
 // ExecuteHandler handles synchronous execution requests.
-func ExecuteHandler(store ExecutionStore, payloads services.PayloadStore, webhooks services.WebhookDispatcher, timeout time.Duration) gin.HandlerFunc {
-	controller := newExecutionController(store, payloads, webhooks, timeout)
+func ExecuteHandler(store ExecutionStore, payloads services.PayloadStore, webhooks services.WebhookDispatcher, timeout time.Duration, internalToken string) gin.HandlerFunc {
+	controller := newExecutionController(store, payloads, webhooks, timeout, internalToken)
 	return controller.handleSync
 }
 
 // ExecuteAsyncHandler handles asynchronous execution requests.
-func ExecuteAsyncHandler(store ExecutionStore, payloads services.PayloadStore, webhooks services.WebhookDispatcher, timeout time.Duration) gin.HandlerFunc {
-	controller := newExecutionController(store, payloads, webhooks, timeout)
+func ExecuteAsyncHandler(store ExecutionStore, payloads services.PayloadStore, webhooks services.WebhookDispatcher, timeout time.Duration, internalToken string) gin.HandlerFunc {
+	controller := newExecutionController(store, payloads, webhooks, timeout, internalToken)
 	return controller.handleAsync
 }
 
 // GetExecutionStatusHandler resolves a single execution record.
 func GetExecutionStatusHandler(store ExecutionStore) gin.HandlerFunc {
-	controller := newExecutionController(store, nil, nil, 0)
+	controller := newExecutionController(store, nil, nil, 0, "")
 	return controller.handleStatus
 }
 
 // BatchExecutionStatusHandler resolves multiple execution records.
 func BatchExecutionStatusHandler(store ExecutionStore) gin.HandlerFunc {
-	controller := newExecutionController(store, nil, nil, 0)
+	controller := newExecutionController(store, nil, nil, 0, "")
 	return controller.handleBatchStatus
 }
 
 // UpdateExecutionStatusHandler ingests status callbacks from agent nodes.
 func UpdateExecutionStatusHandler(store ExecutionStore, payloads services.PayloadStore, webhooks services.WebhookDispatcher, timeout time.Duration) gin.HandlerFunc {
-	controller := newExecutionController(store, payloads, webhooks, timeout)
+	controller := newExecutionController(store, payloads, webhooks, timeout, "")
 	return controller.handleStatusUpdate
 }
 
-func newExecutionController(store ExecutionStore, payloads services.PayloadStore, webhooks services.WebhookDispatcher, timeout time.Duration) *executionController {
+func newExecutionController(store ExecutionStore, payloads services.PayloadStore, webhooks services.WebhookDispatcher, timeout time.Duration, internalToken string) *executionController {
 	// Use default timeout if not provided (0 or negative)
 	if timeout <= 0 {
 		timeout = 90 * time.Second
@@ -193,10 +195,11 @@ func newExecutionController(store ExecutionStore, payloads services.PayloadStore
 		httpClient: &http.Client{
 			Timeout: timeout,
 		},
-		payloads: payloads,
-		webhooks: webhooks,
-		eventBus: store.GetExecutionEventBus(),
-		timeout:  timeout,
+		payloads:      payloads,
+		webhooks:      webhooks,
+		eventBus:      store.GetExecutionEventBus(),
+		timeout:       timeout,
+		internalToken: internalToken,
 	}
 }
 
@@ -771,6 +774,9 @@ type preparedExecution struct {
 	targetType        string
 	webhookRegistered bool
 	webhookError      *string
+	// DID context forwarded to the target agent.
+	callerDID string
+	targetDID string
 }
 
 func (c *executionController) prepareExecution(ctx context.Context, ginCtx *gin.Context) (*preparedExecution, error) {
@@ -930,6 +936,8 @@ func (c *executionController) prepareExecution(ctx context.Context, ginCtx *gin.
 		targetType:        targetType,
 		webhookRegistered: webhookRegistered,
 		webhookError:      webhookError,
+		callerDID:         middleware.GetVerifiedCallerDID(ginCtx),
+		targetDID:         middleware.GetTargetDID(ginCtx),
 	}, nil
 }
 
@@ -953,6 +961,15 @@ func (c *executionController) callAgent(ctx context.Context, plan *preparedExecu
 	}
 	if plan.exec.ActorID != nil {
 		req.Header.Set("X-Actor-ID", *plan.exec.ActorID)
+	}
+	if c.internalToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.internalToken)
+	}
+	if plan.callerDID != "" {
+		req.Header.Set("X-Caller-DID", plan.callerDID)
+	}
+	if plan.targetDID != "" {
+		req.Header.Set("X-Target-DID", plan.targetDID)
 	}
 
 	resp, err := c.httpClient.Do(req)
