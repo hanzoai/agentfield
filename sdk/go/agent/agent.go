@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -110,6 +111,7 @@ type Reasoner struct {
 	Handler      HandlerFunc
 	InputSchema  json.RawMessage
 	OutputSchema json.RawMessage
+	Tags         []string
 
 	CLIEnabled   bool
 	DefaultCLI   bool
@@ -119,12 +121,31 @@ type Reasoner struct {
 	// VCEnabled overrides the agent-level VCEnabled setting for this reasoner.
 	// nil = inherit agent setting, true/false = override.
 	VCEnabled *bool
+
+	// RequireRealtimeValidation forces control-plane verification for this
+	// reasoner, skipping local verification even when enabled.
+	RequireRealtimeValidation bool
 }
 
 // WithVCEnabled overrides VC generation for this specific reasoner.
 func WithVCEnabled(enabled bool) ReasonerOption {
 	return func(r *Reasoner) {
 		r.VCEnabled = &enabled
+	}
+}
+
+// WithReasonerTags sets tags for this reasoner (used for tag-based authorization).
+func WithReasonerTags(tags ...string) ReasonerOption {
+	return func(r *Reasoner) {
+		r.Tags = tags
+	}
+}
+
+// WithRequireRealtimeValidation forces control-plane verification for this
+// reasoner instead of local verification, even when LocalVerification is enabled.
+func WithRequireRealtimeValidation() ReasonerOption {
+	return func(r *Reasoner) {
+		r.RequireRealtimeValidation = true
 	}
 }
 
@@ -253,6 +274,18 @@ type Config struct {
 	// agent's HTTP port. /health and /discover endpoints remain open.
 	// Optional. Default: false.
 	RequireOriginAuth bool
+
+	// LocalVerification enables decentralized verification of incoming
+	// requests using cached policies, revocations, and the admin's public key.
+	// When enabled, the agent verifies DID signatures locally without
+	// hitting the control plane for every call.
+	// Optional. Default: false.
+	LocalVerification bool
+
+	// VerificationRefreshInterval controls how often the local verifier
+	// refreshes its caches from the control plane.
+	// Optional. Default: 5 minutes.
+	VerificationRefreshInterval time.Duration
 }
 
 // CLIConfig controls CLI behaviour and presentation.
@@ -279,6 +312,10 @@ type Agent struct {
 	// DID/VC subsystem
 	didManager  *did.Manager
 	vcGenerator *did.VCGenerator
+
+	// Local verification (decentralized mode)
+	localVerifier                *LocalVerifier
+	realtimeValidationFunctions map[string]struct{}
 
 	serverMu sync.RWMutex
 	server   *http.Server
@@ -338,13 +375,24 @@ func New(cfg Config) (*Agent, error) {
 	}
 
 	a := &Agent{
-		cfg:        cfg,
-		httpClient: httpClient,
-		reasoners:  make(map[string]*Reasoner),
-		aiClient:   aiClient,
-		memory:     NewMemory(cfg.MemoryBackend),
-		stopLease:  make(chan struct{}),
-		logger:     cfg.Logger,
+		cfg:                         cfg,
+		httpClient:                  httpClient,
+		reasoners:                   make(map[string]*Reasoner),
+		aiClient:                    aiClient,
+		memory:                      NewMemory(cfg.MemoryBackend),
+		stopLease:                   make(chan struct{}),
+		logger:                      cfg.Logger,
+		realtimeValidationFunctions: make(map[string]struct{}),
+	}
+
+	// Initialize local verifier if enabled
+	if cfg.LocalVerification && cfg.AgentFieldURL != "" {
+		refreshInterval := cfg.VerificationRefreshInterval
+		if refreshInterval <= 0 {
+			refreshInterval = 5 * time.Minute
+		}
+		a.localVerifier = NewLocalVerifier(cfg.AgentFieldURL, refreshInterval, cfg.Token)
+		cfg.Logger.Printf("Local verification enabled (refresh every %s)", refreshInterval)
 	}
 
 	if strings.TrimSpace(cfg.AgentFieldURL) != "" {
@@ -480,6 +528,10 @@ func (a *Agent) RegisterReasoner(name string, handler HandlerFunc, opts ...Reaso
 		}
 	}
 
+	if meta.RequireRealtimeValidation {
+		a.realtimeValidationFunctions[name] = struct{}{}
+	}
+
 	a.reasoners[name] = meta
 }
 
@@ -566,6 +618,8 @@ func (a *Agent) registerNode(ctx context.Context) error {
 			ID:           reasoner.Name,
 			InputSchema:  reasoner.InputSchema,
 			OutputSchema: reasoner.OutputSchema,
+			Tags:         reasoner.Tags,
+			ProposedTags: reasoner.Tags,
 		})
 	}
 
@@ -597,13 +651,53 @@ func (a *Agent) registerNode(ctx context.Context) error {
 		DeploymentType: a.cfg.DeploymentType,
 	}
 
-	_, err := a.client.RegisterNode(ctx, payload)
+	resp, err := a.client.RegisterNode(ctx, payload)
 	if err != nil {
 		return err
 	}
 
+	// Handle pending approval state: poll until approved
+	if resp != nil && resp.Status == "pending_approval" {
+		a.logger.Printf("node %s registered but awaiting tag approval (pending tags: %v)", a.cfg.NodeID, resp.PendingTags)
+		if err := a.waitForApproval(ctx); err != nil {
+			return fmt.Errorf("tag approval wait failed: %w", err)
+		}
+		a.logger.Printf("node %s tag approval granted", a.cfg.NodeID)
+		return nil
+	}
+
 	a.logger.Printf("node %s registered with AgentField", a.cfg.NodeID)
 	return nil
+}
+
+func (a *Agent) waitForApproval(ctx context.Context) error {
+	const approvalTimeout = 5 * time.Minute
+	ctx, cancel := context.WithTimeout(ctx, approvalTimeout)
+	defer cancel()
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			if ctx.Err() == context.DeadlineExceeded {
+				return fmt.Errorf("tag approval timed out after %s", approvalTimeout)
+			}
+			return ctx.Err()
+		case <-ticker.C:
+			node, err := a.client.GetNode(ctx, a.cfg.NodeID)
+			if err != nil {
+				a.logger.Printf("polling for approval status failed: %v", err)
+				continue
+			}
+			status, _ := node["lifecycle_status"].(string)
+			if status != "" && status != "pending_approval" {
+				return nil
+			}
+			a.logger.Printf("node %s still pending approval...", a.cfg.NodeID)
+		}
+	}
 }
 
 func (a *Agent) markReady(ctx context.Context) error {
@@ -710,14 +804,21 @@ func (a *Agent) handler() http.Handler {
 		mux.HandleFunc("/execute/", a.handleExecute)
 		mux.HandleFunc("/reasoners/", a.handleReasoner)
 
+		var handler http.Handler = mux
+
+		// Apply local verification middleware if enabled
+		if a.localVerifier != nil {
+			handler = a.localVerificationMiddleware(handler)
+		}
+
 		originToken := a.cfg.InternalToken
 		if originToken == "" {
 			originToken = a.cfg.Token
 		}
 		if a.cfg.RequireOriginAuth && originToken != "" {
-			a.router = a.originAuthMiddleware(mux, originToken)
+			a.router = a.originAuthMiddleware(handler, originToken)
 		} else {
-			a.router = mux
+			a.router = handler
 		}
 	})
 	return a.router
@@ -739,6 +840,117 @@ func (a *Agent) originAuthMiddleware(next http.Handler, token string) http.Handl
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			w.Write([]byte(`{"error":"unauthorized","message":"valid Authorization header required"}`))
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// localVerificationMiddleware verifies incoming DID signatures locally
+// using cached admin public key and checks revocation lists.
+func (a *Agent) localVerificationMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+
+		// Only verify execution endpoints
+		if path == "/health" || path == "/discover" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Extract function name to check realtime validation requirement
+		funcName := ""
+		if strings.HasPrefix(path, "/execute/") {
+			funcName = strings.TrimPrefix(path, "/execute/")
+		} else if strings.HasPrefix(path, "/reasoners/") {
+			funcName = strings.TrimPrefix(path, "/reasoners/")
+		}
+		funcName = strings.TrimSuffix(funcName, "/")
+
+		// Skip local verification for realtime-validated functions
+		if _, skip := a.realtimeValidationFunctions[funcName]; skip {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Refresh cache if stale (best-effort, non-blocking for first request).
+		// Use atomic flag to ensure at most one refresh goroutine runs at a time.
+		if a.localVerifier.NeedsRefresh() {
+			if atomic.CompareAndSwapInt32(&a.localVerifier.refreshing, 0, 1) {
+				go func() {
+					defer atomic.StoreInt32(&a.localVerifier.refreshing, 0)
+					if err := a.localVerifier.Refresh(); err != nil {
+						a.logger.Printf("warn: local verification cache refresh failed: %v", err)
+					}
+				}()
+			}
+		}
+
+		// Extract DID auth headers
+		callerDID := r.Header.Get("X-Caller-DID")
+		signature := r.Header.Get("X-DID-Signature")
+		timestamp := r.Header.Get("X-DID-Timestamp")
+
+		// Require DID authentication — fail closed when no caller DID provided.
+		if callerDID == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error":   "did_auth_required",
+				"message": "DID authentication required",
+			})
+			return
+		}
+
+		// Require signature when caller DID is present.
+		if signature == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error":   "signature_required",
+				"message": "DID signature required",
+			})
+			return
+		}
+
+		// Check revocation
+		if a.localVerifier.CheckRevocation(callerDID) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error":   "did_revoked",
+				"message": "Caller DID " + callerDID + " has been revoked",
+			})
+			return
+		}
+
+		// Verify signature — need to read and buffer the body
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"error":"body_read_error","message":"Failed to read request body"}`))
+			return
+		}
+		// Restore body for downstream handlers
+		r.Body = io.NopCloser(bytes.NewReader(body))
+
+		if !a.localVerifier.VerifySignature(callerDID, signature, timestamp, body) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"error":"signature_invalid","message":"DID signature verification failed"}`))
+			return
+		}
+
+		// Evaluate access policies after successful signature verification.
+		if !a.localVerifier.EvaluatePolicy(nil, a.cfg.Tags, funcName, nil) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error":   "policy_denied",
+				"message": "Access denied by policy",
+			})
 			return
 		}
 

@@ -28,28 +28,37 @@ func CanonicalAgentTags(agent *types.AgentNode) []string {
 		tags = append(tags, normalized)
 	}
 
-	if agent.Metadata.Deployment != nil && agent.Metadata.Deployment.Tags != nil {
-		for key, value := range agent.Metadata.Deployment.Tags {
-			// Canonical format uses plain values, but include keys for compatibility.
-			add(value)
-			add(key)
-		}
-	}
+	// NOTE: Deployment metadata tags (agent.Metadata.Deployment.Tags) and
+	// agent.DeploymentType are excluded from canonical authorization tags because
+	// they are self-asserted at registration time and NOT subject to the tag
+	// approval workflow. Including them would allow agents to self-assign
+	// authorization-relevant tags.
 
 	for _, reasoner := range agent.Reasoners {
-		for _, tag := range reasoner.Tags {
+		// Prefer approved tags over raw tags for canonical matching
+		sourceTags := reasoner.Tags
+		if len(reasoner.ApprovedTags) > 0 {
+			sourceTags = reasoner.ApprovedTags
+		}
+		for _, tag := range sourceTags {
 			add(tag)
 		}
 	}
 
 	for _, skill := range agent.Skills {
-		for _, tag := range skill.Tags {
+		// Prefer approved tags over raw tags for canonical matching
+		sourceTags := skill.Tags
+		if len(skill.ApprovedTags) > 0 {
+			sourceTags = skill.ApprovedTags
+		}
+		for _, tag := range sourceTags {
 			add(tag)
 		}
 	}
 
-	if agent.DeploymentType != "" {
-		add(agent.DeploymentType)
+	// Include agent-level approved tags
+	for _, tag := range agent.ApprovedTags {
+		add(tag)
 	}
 
 	return tags

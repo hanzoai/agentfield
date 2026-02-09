@@ -60,21 +60,13 @@ func (r *testAgentResolver) GetAgent(_ context.Context, agentID string) (*types.
 	switch agentID {
 	case "protected-agent":
 		return &types.AgentNode{
-			ID: agentID,
-			Metadata: types.AgentMetadata{
-				Deployment: &types.DeploymentMetadata{
-					Tags: map[string]string{"role": "admin"},
-				},
-			},
+			ID:           agentID,
+			ApprovedTags: []string{"admin"},
 		}, nil
 	default:
 		return &types.AgentNode{
-			ID: agentID,
-			Metadata: types.AgentMetadata{
-				Deployment: &types.DeploymentMetadata{
-					Tags: map[string]string{"role": "public"},
-				},
-			},
+			ID:           agentID,
+			ApprovedTags: []string{"public"},
 		}, nil
 	}
 }
@@ -135,6 +127,8 @@ func setupProtectedRouteWithConfig(permissionService PermissionServiceInterface,
 	}
 	router.Use(PermissionCheckMiddleware(
 		permissionService,
+		nil, // policyService — not tested here
+		nil, // tagVCVerifier — not tested here
 		resolver,
 		&testDIDResolver{},
 		config,

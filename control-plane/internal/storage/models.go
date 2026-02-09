@@ -65,6 +65,8 @@ type AgentNodeModel struct {
 	RegisteredAt        time.Time  `gorm:"column:registered_at;autoCreateTime"`
 	Features            []byte     `gorm:"column:features"`
 	Metadata            []byte     `gorm:"column:metadata"`
+	ProposedTags        []byte     `gorm:"column:proposed_tags"`
+	ApprovedTags        []byte     `gorm:"column:approved_tags"`
 }
 
 func (AgentNodeModel) TableName() string { return "agent_nodes" }
@@ -460,3 +462,39 @@ type ProtectedAgentConfigModel struct {
 }
 
 func (ProtectedAgentConfigModel) TableName() string { return "protected_agents_config" }
+
+// AccessPolicyModel represents a tag-based access policy for cross-agent calls.
+type AccessPolicyModel struct {
+	ID             int64     `gorm:"column:id;primaryKey;autoIncrement"`
+	Name           string    `gorm:"column:name;not null;uniqueIndex"`
+	CallerTags     string    `gorm:"column:caller_tags;type:text;not null"` // JSON array
+	TargetTags     string    `gorm:"column:target_tags;type:text;not null"` // JSON array
+	AllowFunctions string    `gorm:"column:allow_functions;type:text"`      // JSON array
+	DenyFunctions  string    `gorm:"column:deny_functions;type:text"`       // JSON array
+	Constraints    string    `gorm:"column:constraints;type:text"`          // JSON object
+	Action         string    `gorm:"column:action;not null;default:'allow'"`
+	Priority       int       `gorm:"column:priority;not null;default:0;index"`
+	Enabled        bool      `gorm:"column:enabled;not null;default:true;index"`
+	Description    *string   `gorm:"column:description"`
+	CreatedAt      time.Time `gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt      time.Time `gorm:"column:updated_at;autoUpdateTime"`
+}
+
+func (AccessPolicyModel) TableName() string { return "access_policies" }
+
+// AgentTagVCModel stores signed Agent Tag VCs issued on tag approval.
+type AgentTagVCModel struct {
+	ID         int64      `gorm:"column:id;primaryKey;autoIncrement"`
+	AgentID    string     `gorm:"column:agent_id;uniqueIndex;not null"`
+	AgentDID   string     `gorm:"column:agent_did;not null;index"`
+	VCID       string     `gorm:"column:vc_id;uniqueIndex;not null"`
+	VCDocument string     `gorm:"column:vc_document;type:text;not null"`
+	Signature  string     `gorm:"column:signature;type:text"`
+	IssuedAt   time.Time  `gorm:"column:issued_at;not null"`
+	ExpiresAt  *time.Time `gorm:"column:expires_at"`
+	RevokedAt  *time.Time `gorm:"column:revoked_at"`
+	CreatedAt  time.Time  `gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt  time.Time  `gorm:"column:updated_at;autoUpdateTime"`
+}
+
+func (AgentTagVCModel) TableName() string { return "agent_tag_vcs" }

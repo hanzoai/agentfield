@@ -29,13 +29,11 @@ func TestCanonicalTagMatching_ExactAndWildcard(t *testing.T) {
 		},
 	}
 
+	// Use approved tags (not deployment metadata, which are self-asserted and
+	// excluded from canonical authorization tags for security)
 	agent := &types.AgentNode{
-		ID: "agent-a",
-		Metadata: types.AgentMetadata{
-			Deployment: &types.DeploymentMetadata{
-				Tags: map[string]string{"role": "admin"},
-			},
-		},
+		ID:           "agent-a",
+		ApprovedTags: []string{"admin"},
 	}
 	canonicalTags := CanonicalAgentTags(agent)
 

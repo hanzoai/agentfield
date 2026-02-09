@@ -409,6 +409,35 @@ func (s *stubStorage) ListDIDDocuments(ctx context.Context) ([]*types.DIDDocumen
 	return nil, nil
 }
 
+// Agent lifecycle stub
+func (s *stubStorage) ListAgentsByLifecycleStatus(ctx context.Context, status types.AgentLifecycleStatus) ([]*types.AgentNode, error) {
+	return nil, nil
+}
+
+// Access policy stubs
+func (s *stubStorage) GetAccessPolicies(ctx context.Context) ([]*types.AccessPolicy, error) {
+	return nil, nil
+}
+func (s *stubStorage) GetAccessPolicyByID(ctx context.Context, id int64) (*types.AccessPolicy, error) {
+	return nil, nil
+}
+func (s *stubStorage) CreateAccessPolicy(ctx context.Context, policy *types.AccessPolicy) error {
+	return nil
+}
+func (s *stubStorage) UpdateAccessPolicy(ctx context.Context, policy *types.AccessPolicy) error {
+	return nil
+}
+func (s *stubStorage) DeleteAccessPolicy(ctx context.Context, id int64) error { return nil }
+
+// Agent Tag VC stubs
+func (s *stubStorage) StoreAgentTagVC(ctx context.Context, agentID, agentDID, vcID, vcDocument, signature string, issuedAt time.Time, expiresAt *time.Time) error {
+	return nil
+}
+func (s *stubStorage) GetAgentTagVC(ctx context.Context, agentID string) (*types.AgentTagVCRecord, error) {
+	return nil, nil
+}
+func (s *stubStorage) RevokeAgentTagVC(ctx context.Context, agentID string) error { return nil }
+
 // stubPayloadStore implements services.PayloadStore
 type stubPayloadStore struct{}
 

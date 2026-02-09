@@ -107,6 +107,11 @@ type AuthorizationConfig struct {
 	// forwards execution requests to agents. Agents with RequireOriginAuth enabled
 	// validate this token, preventing direct access to their HTTP ports.
 	InternalToken string `yaml:"internal_token" mapstructure:"internal_token"`
+	// TagApprovalRules configures how proposed tags are handled at registration time.
+	// Default mode is "auto" (all tags auto-approved) for backward compatibility.
+	TagApprovalRules TagApprovalRulesConfig `yaml:"tag_approval_rules" mapstructure:"tag_approval_rules"`
+	// AccessPolicies defines tag-based authorization policies for cross-agent calls.
+	AccessPolicies []AccessPolicyConfig `yaml:"access_policies" mapstructure:"access_policies"`
 }
 
 // ProtectedAgentConfig defines a rule for protecting agents.
@@ -117,6 +122,39 @@ type ProtectedAgentConfig struct {
 	Pattern string `yaml:"pattern" mapstructure:"pattern"`
 	// Description is a human-readable description of why this agent is protected
 	Description string `yaml:"description" mapstructure:"description"`
+}
+
+// TagApprovalRulesConfig configures tag approval behavior at registration.
+type TagApprovalRulesConfig struct {
+	// DefaultMode is the approval mode for tags not matching any rule: "auto", "manual", or "forbidden".
+	// Default: "auto" (backward compat — all tags auto-approved when no rules configured).
+	DefaultMode string            `yaml:"default_mode" mapstructure:"default_mode"`
+	Rules       []TagApprovalRule `yaml:"rules" mapstructure:"rules"`
+}
+
+// TagApprovalRule defines the approval mode for a set of tags.
+type TagApprovalRule struct {
+	Tags     []string `yaml:"tags" mapstructure:"tags"`
+	Approval string   `yaml:"approval" mapstructure:"approval"` // "auto", "manual", "forbidden"
+	Reason   string   `yaml:"reason" mapstructure:"reason"`
+}
+
+// AccessPolicyConfig defines a tag-based authorization policy for cross-agent calls.
+type AccessPolicyConfig struct {
+	Name           string                        `yaml:"name" mapstructure:"name"`
+	CallerTags     []string                      `yaml:"caller_tags" mapstructure:"caller_tags"`
+	TargetTags     []string                      `yaml:"target_tags" mapstructure:"target_tags"`
+	AllowFunctions []string                      `yaml:"allow_functions" mapstructure:"allow_functions"`
+	DenyFunctions  []string                      `yaml:"deny_functions" mapstructure:"deny_functions"`
+	Constraints    map[string]ConstraintConfig    `yaml:"constraints" mapstructure:"constraints"`
+	Action         string                        `yaml:"action" mapstructure:"action"`     // "allow" or "deny"
+	Priority       int                           `yaml:"priority" mapstructure:"priority"` // higher = evaluated first
+}
+
+// ConstraintConfig defines a parameter constraint for a policy.
+type ConstraintConfig struct {
+	Operator string `yaml:"operator" mapstructure:"operator"` // "<=", ">=", "==", "!=", "<", ">"
+	Value    any    `yaml:"value" mapstructure:"value"`
 }
 
 // VCRequirements holds VC generation requirements.

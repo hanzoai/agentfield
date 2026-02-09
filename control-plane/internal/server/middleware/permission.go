@@ -1,7 +1,10 @@
 package middleware
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/services"
@@ -28,6 +31,16 @@ type DIDResolverInterface interface {
 	// ResolveAgentIDByDID looks up the agent ID associated with a DID.
 	// Returns empty string if the DID cannot be resolved.
 	ResolveAgentIDByDID(ctx context.Context, did string) string
+}
+
+// AccessPolicyServiceInterface defines the methods required for tag-based policy evaluation.
+type AccessPolicyServiceInterface interface {
+	EvaluateAccess(callerTags, targetTags []string, functionName string, inputParams map[string]any) *types.PolicyEvaluationResult
+}
+
+// TagVCVerifierInterface defines the methods required for verifying Agent Tag VCs.
+type TagVCVerifierInterface interface {
+	VerifyAgentTagVC(ctx context.Context, agentID string) (*types.AgentTagVCDocument, error)
 }
 
 // PermissionConfig holds configuration for permission checking.
@@ -70,6 +83,8 @@ const (
 //  5. If auto-request is enabled, creates a permission request on denial
 func PermissionCheckMiddleware(
 	permissionService PermissionServiceInterface,
+	policyService AccessPolicyServiceInterface,
+	tagVCVerifier TagVCVerifierInterface,
 	agentResolver AgentResolverInterface,
 	didResolver DIDResolverInterface,
 	config PermissionConfig,
@@ -117,12 +132,97 @@ func PermissionCheckMiddleware(
 		// Store the resolved agent in context for downstream use
 		c.Set(string(TargetAgentKey), agent)
 
+		// Block calls to agents in pending_approval status
+		if agent.LifecycleStatus == types.AgentStatusPendingApproval {
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
+				"error":           "agent_pending_approval",
+				"message":         "Target agent is awaiting tag approval and cannot receive calls",
+				"target_agent_id": agentID,
+			})
+			return
+		}
+
 		// Generate target DID
 		targetDID := didResolver.GenerateDIDWeb(agentID)
 		c.Set(string(TargetDIDKey), targetDID)
 
 		// Get canonical plain tags for permission matching.
 		tags := services.CanonicalAgentTags(agent)
+
+		// Extract caller DID early (needed for both policy evaluation and approval check).
+		callerDID := GetVerifiedCallerDID(c)
+
+		// Parse function name from target param for policy evaluation.
+		_, functionName, _ := parseTargetParam(target)
+
+		// --- Tag-based policy evaluation ---
+		// Evaluate access policies before the legacy approval check.
+		// If a policy matches, its decision is authoritative.
+		// Policy evaluation runs even if callerDID is empty (caller tags will be empty,
+		// which may still match deny-all policies).
+		if policyService != nil {
+			var callerTags []string
+			if callerDID != "" {
+				callerAgentID := didResolver.ResolveAgentIDByDID(ctx, callerDID)
+				if callerAgentID != "" {
+					// Try to get VC-verified tags first (cryptographic proof of approved tags)
+					if tagVCVerifier != nil {
+						tagVC, vcErr := tagVCVerifier.VerifyAgentTagVC(ctx, callerAgentID)
+						if vcErr == nil && tagVC != nil {
+							callerTags = tagVC.CredentialSubject.Permissions.Tags
+						} else if vcErr != nil {
+							// VC exists but verification failed (revoked/expired/invalid sig)
+							// Do NOT fall back to unverified tags — use empty tags (fail closed)
+							_ = vcErr // logged inside VerifyAgentTagVC
+						}
+					}
+					// Only fall back to registration tags if no VC has been issued
+					// (vcErr above was "no tag VC for agent"), not if VC verification failed
+					if len(callerTags) == 0 && tagVCVerifier == nil {
+						if callerAgent, agentErr := agentResolver.GetAgent(ctx, callerAgentID); agentErr == nil && callerAgent != nil {
+							callerTags = services.CanonicalAgentTags(callerAgent)
+						}
+					}
+				}
+			}
+
+			// Read input params from request body (peek without consuming).
+			// Always restore the body regardless of read success.
+			var inputParams map[string]any
+			if c.Request.Body != nil {
+				body, readErr := io.ReadAll(c.Request.Body)
+				if readErr == nil && len(body) > 0 {
+					c.Request.Body = io.NopCloser(bytes.NewBuffer(body))
+					json.Unmarshal(body, &inputParams) //nolint:errcheck
+				} else if readErr == nil {
+					c.Request.Body = io.NopCloser(bytes.NewBuffer(body))
+				}
+			}
+
+			policyResult := policyService.EvaluateAccess(callerTags, tags, functionName, inputParams)
+			if policyResult.Matched {
+				result := &PermissionCheckResult{
+					Allowed:            policyResult.Allowed,
+					RequiresPermission: true,
+				}
+				c.Set(string(PermissionCheckResultKey), result)
+
+				if !policyResult.Allowed {
+					c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+						"error":   "access_denied",
+						"message": "Access denied by policy",
+					})
+					return
+				}
+
+				// Policy allows — proceed
+				c.Next()
+				return
+			}
+			// No policy matched — fall through to legacy approval check
+		}
+
+		// --- Legacy approval-based permission check ---
 		isProtected := permissionService.IsAgentProtected(agentID, tags)
 
 		// Unprotected targets may proceed without DID auth or permission approval.
@@ -136,7 +236,6 @@ func PermissionCheckMiddleware(
 		}
 
 		// Protected targets require a verified DID.
-		callerDID := GetVerifiedCallerDID(c)
 		if callerDID == "" {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error":               "did_auth_required",

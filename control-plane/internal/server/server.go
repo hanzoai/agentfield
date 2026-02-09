@@ -65,8 +65,11 @@ type AgentFieldServer struct {
 	vcService         *services.VCService
 	didRegistry       *services.DIDRegistry
 	didWebService     *services.DIDWebService
-	permissionService *services.PermissionService
-	agentfieldHome    string
+	permissionService   *services.PermissionService
+	accessPolicyService *services.AccessPolicyService
+	tagApprovalService  *services.TagApprovalService
+	tagVCVerifier       *services.TagVCVerifier
+	agentfieldHome     string
 	// Cleanup service
 	cleanupService         *handlers.ExecutionCleanupService
 	payloadStore           services.PayloadStore
@@ -257,7 +260,10 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		// Create PermissionService if authorization is enabled
 		if cfg.Features.DID.Authorization.Enabled {
 			if cfg.Features.DID.Authorization.AdminToken == "" {
-				logger.Logger.Warn().Msg("⚠️  Admin permission routes are unprotected (no admin_token configured). This is fine for local development. For production, set AGENTFIELD_AUTHORIZATION_ADMIN_TOKEN or features.did.authorization.admin_token in config.")
+				logger.Logger.Error().Msg("⚠️  SECURITY WARNING: Authorization is enabled but no admin_token is configured! Admin routes (tag approval, policy management) are unprotected. Set AGENTFIELD_AUTHORIZATION_ADMIN_TOKEN for production use.")
+			}
+			if cfg.Features.DID.Authorization.TagApprovalRules.DefaultMode == "" || cfg.Features.DID.Authorization.TagApprovalRules.DefaultMode == "auto" {
+				logger.Logger.Warn().Msg("⚠️  Tag approval default_mode is 'auto' — all agent tags will be auto-approved. Set tag_approval_rules.default_mode to 'manual' for production.")
 			}
 			fmt.Println("🔐 Creating Permission service...")
 			permissionConfig := &services.PermissionConfig{
@@ -303,6 +309,86 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 				}
 			}
 		}
+	}
+
+	// Initialize tag approval service (uses config-based rules)
+	var tagApprovalService *services.TagApprovalService
+	if cfg.Features.DID.Authorization.Enabled {
+		tagApprovalService = services.NewTagApprovalService(
+			cfg.Features.DID.Authorization.TagApprovalRules,
+			storageProvider,
+		)
+		if tagApprovalService.IsEnabled() {
+			logger.Logger.Info().Msg("🏷️  Tag approval service enabled with rules")
+		}
+	}
+
+	// Initialize access policy service (tag-based authorization)
+	var accessPolicyService *services.AccessPolicyService
+	if cfg.Features.DID.Authorization.Enabled {
+		accessPolicyService = services.NewAccessPolicyService(storageProvider)
+		if err := accessPolicyService.Initialize(context.Background()); err != nil {
+			logger.Logger.Warn().Err(err).Msg("Failed to initialize access policy service")
+		} else {
+			logger.Logger.Info().Msg("📋 Access policy service initialized")
+		}
+
+		// Seed access policies from config file
+		if len(cfg.Features.DID.Authorization.AccessPolicies) > 0 {
+			ctx := context.Background()
+			seededCount := 0
+			for _, policyCfg := range cfg.Features.DID.Authorization.AccessPolicies {
+				desc := ""
+				if policyCfg.Name != "" {
+					desc = "Seeded from config"
+				}
+				constraints := make(map[string]types.AccessConstraint)
+				for k, v := range policyCfg.Constraints {
+					constraints[k] = types.AccessConstraint{
+						Operator: v.Operator,
+						Value:    v.Value,
+					}
+				}
+				_, err := accessPolicyService.AddPolicy(ctx, &types.AccessPolicyRequest{
+					Name:           policyCfg.Name,
+					CallerTags:     policyCfg.CallerTags,
+					TargetTags:     policyCfg.TargetTags,
+					AllowFunctions: policyCfg.AllowFunctions,
+					DenyFunctions:  policyCfg.DenyFunctions,
+					Constraints:    constraints,
+					Action:         policyCfg.Action,
+					Priority:       policyCfg.Priority,
+					Description:    desc,
+				})
+				if err != nil {
+					logger.Logger.Debug().
+						Err(err).
+						Str("policy_name", policyCfg.Name).
+						Msg("Failed to seed access policy from config (may already exist)")
+				} else {
+					seededCount++
+				}
+			}
+			if seededCount > 0 {
+				logger.Logger.Info().
+					Int("seeded_count", seededCount).
+					Int("total_config_policies", len(cfg.Features.DID.Authorization.AccessPolicies)).
+					Msg("Seeded access policies from config")
+			}
+		}
+	}
+
+	// Initialize tag VC verifier for cryptographic tag verification at call time
+	var tagVCVerifier *services.TagVCVerifier
+	if cfg.Features.DID.Authorization.Enabled && vcService != nil {
+		tagVCVerifier = services.NewTagVCVerifier(storageProvider, vcService)
+		logger.Logger.Info().Msg("🔐 Tag VC verifier initialized")
+	}
+
+	// Wire VC service into tag approval service for VC issuance on approval
+	if tagApprovalService != nil && vcService != nil {
+		tagApprovalService.SetVCService(vcService)
+		logger.Logger.Info().Msg("🏷️  Tag approval service configured for VC issuance")
 	}
 
 	payloadStore := services.NewFilePayloadStore(dirs.PayloadsDir)
@@ -362,6 +448,9 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		didRegistry:            didRegistry,
 		didWebService:          didWebService,
 		permissionService:      permissionService,
+		accessPolicyService:    accessPolicyService,
+		tagApprovalService:     tagApprovalService,
+		tagVCVerifier:          tagVCVerifier,
 		agentfieldHome:         agentfieldHome,
 		cleanupService:         cleanupService,
 		payloadStore:           payloadStore,
@@ -1080,8 +1169,8 @@ func (s *AgentFieldServer) setupRoutes() {
 		}
 
 		// Node management endpoints
-		agentAPI.POST("/nodes/register", handlers.RegisterNodeHandler(s.storage, s.uiService, s.didService, s.presenceManager, s.didWebService))
-		agentAPI.POST("/nodes", handlers.RegisterNodeHandler(s.storage, s.uiService, s.didService, s.presenceManager, s.didWebService))
+		agentAPI.POST("/nodes/register", handlers.RegisterNodeHandler(s.storage, s.uiService, s.didService, s.presenceManager, s.didWebService, s.tagApprovalService))
+		agentAPI.POST("/nodes", handlers.RegisterNodeHandler(s.storage, s.uiService, s.didService, s.presenceManager, s.didWebService, s.tagApprovalService))
 		agentAPI.POST("/nodes/register-serverless", handlers.RegisterServerlessAgentHandler(s.storage, s.uiService, s.didService, s.presenceManager, s.didWebService))
 		agentAPI.GET("/nodes", handlers.ListNodesHandler(s.storage))
 		agentAPI.GET("/nodes/:node_id", handlers.GetNodeHandler(s.storage))
@@ -1105,11 +1194,33 @@ func (s *AgentFieldServer) setupRoutes() {
 
 		// TODO: Add other node routes (DeleteNode)
 
-		// Reasoner execution endpoints (legacy)
-		agentAPI.POST("/reasoners/:reasoner_id", handlers.ExecuteReasonerHandler(s.storage))
-
-		// Skill execution endpoints (legacy)
-		agentAPI.POST("/skills/:skill_id", handlers.ExecuteSkillHandler(s.storage))
+		// Reasoner and skill execution endpoints (legacy)
+		// When authorization is enabled, these require the same permission middleware
+		// as the unified execute endpoints to prevent policy bypass.
+		if s.config.Features.DID.Authorization.Enabled && s.permissionService != nil && s.didWebService != nil {
+			legacyReasonerGroup := agentAPI.Group("/reasoners")
+			legacySkillGroup := agentAPI.Group("/skills")
+			permConfigLegacy := middleware.PermissionConfig{
+				Enabled:           true,
+				AutoRequestOnDeny: s.config.Features.DID.Authorization.AutoRequestOnDeny,
+			}
+			legacyMiddleware := middleware.PermissionCheckMiddleware(
+				s.permissionService,
+				s.accessPolicyService,
+				s.tagVCVerifier,
+				s.storage,
+				s.didWebService,
+				permConfigLegacy,
+			)
+			legacyReasonerGroup.Use(legacyMiddleware)
+			legacySkillGroup.Use(legacyMiddleware)
+			legacyReasonerGroup.POST("/:reasoner_id", handlers.ExecuteReasonerHandler(s.storage))
+			legacySkillGroup.POST("/:skill_id", handlers.ExecuteSkillHandler(s.storage))
+			logger.Logger.Info().Msg("🔒 Permission checking enabled on legacy reasoner/skill endpoints")
+		} else {
+			agentAPI.POST("/reasoners/:reasoner_id", handlers.ExecuteReasonerHandler(s.storage))
+			agentAPI.POST("/skills/:skill_id", handlers.ExecuteSkillHandler(s.storage))
+		}
 
 		// Unified execution endpoints (path-based)
 		// These routes may have permission middleware applied if authorization is enabled
@@ -1123,6 +1234,8 @@ func (s *AgentFieldServer) setupRoutes() {
 				}
 				executeGroup.Use(middleware.PermissionCheckMiddleware(
 					s.permissionService,
+					s.accessPolicyService,
+					s.tagVCVerifier,
 					s.storage,
 					s.didWebService,
 					permConfig,
@@ -1235,6 +1348,124 @@ func (s *AgentFieldServer) setupRoutes() {
 		}
 		// Note: Removed unused/unimplemented DID endpoint placeholders for system simplification
 
+		// Agent Tag VC endpoint (for agents to download their own verified tag credential)
+		if s.tagVCVerifier != nil {
+			agentAPI.GET("/agents/:agentId/tag-vc", func(c *gin.Context) {
+				agentID := c.Param("agentId")
+				if agentID == "" {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "agent_id is required"})
+					return
+				}
+				record, err := s.storage.GetAgentTagVC(c.Request.Context(), agentID)
+				if err != nil {
+					c.JSON(http.StatusNotFound, gin.H{
+						"error":   "tag_vc_not_found",
+						"message": fmt.Sprintf("No tag VC found for agent %s", agentID),
+					})
+					return
+				}
+				if record.RevokedAt != nil {
+					c.JSON(http.StatusGone, gin.H{
+						"error":   "tag_vc_revoked",
+						"message": "Agent tag VC has been revoked",
+					})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{
+					"agent_id":    record.AgentID,
+					"agent_did":   record.AgentDID,
+					"vc_id":       record.VCID,
+					"vc_document": json.RawMessage(record.VCDocument),
+					"issued_at":   record.IssuedAt,
+					"expires_at":  record.ExpiresAt,
+				})
+			})
+			logger.Logger.Info().Msg("🔐 Agent tag VC endpoint registered")
+		}
+
+		// Decentralized verification endpoints (for SDK local verification)
+		// Policy distribution endpoint — agents cache these for local policy evaluation
+		if s.accessPolicyService != nil {
+			agentAPI.GET("/policies", func(c *gin.Context) {
+				policies, err := s.accessPolicyService.ListPolicies(c.Request.Context())
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{
+						"error":   "failed_to_list_policies",
+						"message": "Failed to list policies",
+					})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{
+					"policies":   policies,
+					"total":      len(policies),
+					"fetched_at": time.Now().UTC().Format(time.RFC3339),
+				})
+			})
+			logger.Logger.Info().Msg("📋 Policy distribution endpoint registered (GET /api/v1/policies)")
+		}
+
+		// Revocation list endpoint — agents cache revoked DIDs for local verification
+		if s.didWebService != nil {
+			agentAPI.GET("/revocations", func(c *gin.Context) {
+				docs, err := s.storage.ListDIDDocuments(c.Request.Context())
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{
+						"error":   "failed_to_list_revocations",
+						"message": "Failed to list revocations",
+					})
+					return
+				}
+				revokedDIDs := make([]string, 0)
+				for _, doc := range docs {
+					if doc.IsRevoked() {
+						revokedDIDs = append(revokedDIDs, doc.DID)
+					}
+				}
+				c.JSON(http.StatusOK, gin.H{
+					"revoked_dids": revokedDIDs,
+					"total":        len(revokedDIDs),
+					"fetched_at":   time.Now().UTC().Format(time.RFC3339),
+				})
+			})
+			logger.Logger.Info().Msg("🚫 Revocation list endpoint registered (GET /api/v1/revocations)")
+		}
+
+		// Admin public key endpoint — agents use this for offline VC signature verification
+		if s.didService != nil {
+			agentAPI.GET("/admin/public-key", func(c *gin.Context) {
+				issuerDID, err := s.didService.GetControlPlaneIssuerDID()
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{
+						"error":   "issuer_did_unavailable",
+						"message": "Issuer DID unavailable",
+					})
+					return
+				}
+				identity, err := s.didService.ResolveDID(issuerDID)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{
+						"error":   "public_key_unavailable",
+						"message": "Public key unavailable",
+					})
+					return
+				}
+				var publicKeyJWK map[string]interface{}
+				if err := json.Unmarshal([]byte(identity.PublicKeyJWK), &publicKeyJWK); err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{
+						"error":   "public_key_parse_error",
+						"message": "Failed to parse public key JWK",
+					})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{
+					"issuer_did":     issuerDID,
+					"public_key_jwk": publicKeyJWK,
+					"fetched_at":     time.Now().UTC().Format(time.RFC3339),
+				})
+			})
+			logger.Logger.Info().Msg("🔑 Admin public key endpoint registered (GET /api/v1/admin/public-key)")
+		}
+
 		// Settings API routes (observability webhook configuration)
 		settings := agentAPI.Group("/settings")
 		{
@@ -1260,6 +1491,18 @@ func (s *AgentFieldServer) setupRoutes() {
 			adminPermissionHandlers.RegisterRoutes(adminGroup)
 			// VC endpoint requires admin auth (contains sensitive approval metadata)
 			permissionHandlers.RegisterAdminRoutes(adminGroup)
+
+			// Tag approval admin routes (part of the same admin group)
+			if s.tagApprovalService != nil {
+				tagApprovalHandlers := admin.NewTagApprovalHandlers(s.tagApprovalService)
+				tagApprovalHandlers.RegisterRoutes(adminGroup)
+			}
+
+			// Access policy admin routes (part of the same admin group)
+			if s.accessPolicyService != nil {
+				accessPolicyHandlers := admin.NewAccessPolicyHandlers(s.accessPolicyService)
+				accessPolicyHandlers.RegisterRoutes(adminGroup)
+			}
 
 			logger.Logger.Info().Msg("📋 Permission API routes registered")
 		}

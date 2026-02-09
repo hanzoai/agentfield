@@ -202,12 +202,27 @@ type StorageProvider interface {
 	CreateProtectedAgentRule(ctx context.Context, rule *types.ProtectedAgentRule) error
 	DeleteProtectedAgentRule(ctx context.Context, id int64) error
 
+	// Access policy operations (tag-based authorization)
+	GetAccessPolicies(ctx context.Context) ([]*types.AccessPolicy, error)
+	GetAccessPolicyByID(ctx context.Context, id int64) (*types.AccessPolicy, error)
+	CreateAccessPolicy(ctx context.Context, policy *types.AccessPolicy) error
+	UpdateAccessPolicy(ctx context.Context, policy *types.AccessPolicy) error
+	DeleteAccessPolicy(ctx context.Context, id int64) error
+
+	// Agent Tag VC operations (tag-based PermissionVC)
+	StoreAgentTagVC(ctx context.Context, agentID, agentDID, vcID, vcDocument, signature string, issuedAt time.Time, expiresAt *time.Time) error
+	GetAgentTagVC(ctx context.Context, agentID string) (*types.AgentTagVCRecord, error)
+	RevokeAgentTagVC(ctx context.Context, agentID string) error
+
 	// DID Document operations (did:web resolution)
 	StoreDIDDocument(ctx context.Context, record *types.DIDDocumentRecord) error
 	GetDIDDocument(ctx context.Context, did string) (*types.DIDDocumentRecord, error)
 	GetDIDDocumentByAgentID(ctx context.Context, agentID string) (*types.DIDDocumentRecord, error)
 	RevokeDIDDocument(ctx context.Context, did string) error
 	ListDIDDocuments(ctx context.Context) ([]*types.DIDDocumentRecord, error)
+
+	// Agent lifecycle queries (tag approval workflow)
+	ListAgentsByLifecycleStatus(ctx context.Context, status types.AgentLifecycleStatus) ([]*types.AgentNode, error)
 }
 
 // ComponentDIDRequest represents a component DID to be stored

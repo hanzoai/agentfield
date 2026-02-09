@@ -364,7 +364,7 @@ func processHeartbeatAsync(storageProvider storage.StorageProvider, uiService *s
 }
 
 // RegisterNodeHandler handles the registration of a new agent node.
-func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *services.UIService, didService *services.DIDService, presenceManager *services.PresenceManager, didWebService *services.DIDWebService) gin.HandlerFunc {
+func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *services.UIService, didService *services.DIDService, presenceManager *services.PresenceManager, didWebService *services.DIDWebService, tagApprovalService *services.TagApprovalService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
 		var newNode types.AgentNode
@@ -392,6 +392,25 @@ func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *ser
 		}
 
 		logger.Logger.Debug().Msgf("✅ Node validation passed for ID: %s", newNode.ID)
+
+		// Normalize proposed_tags → tags for backward compatibility.
+		// If a skill/reasoner has proposed_tags but no tags, copy proposed_tags to tags.
+		for i := range newNode.Reasoners {
+			if len(newNode.Reasoners[i].ProposedTags) > 0 && len(newNode.Reasoners[i].Tags) == 0 {
+				newNode.Reasoners[i].Tags = newNode.Reasoners[i].ProposedTags
+			}
+			if len(newNode.Reasoners[i].Tags) > 0 && len(newNode.Reasoners[i].ProposedTags) == 0 {
+				newNode.Reasoners[i].ProposedTags = newNode.Reasoners[i].Tags
+			}
+		}
+		for i := range newNode.Skills {
+			if len(newNode.Skills[i].ProposedTags) > 0 && len(newNode.Skills[i].Tags) == 0 {
+				newNode.Skills[i].Tags = newNode.Skills[i].ProposedTags
+			}
+			if len(newNode.Skills[i].Tags) > 0 && len(newNode.Skills[i].ProposedTags) == 0 {
+				newNode.Skills[i].ProposedTags = newNode.Skills[i].Tags
+			}
+		}
 
 		candidateList, defaultPort := gatherCallbackCandidates(newNode.BaseURL, newNode.CallbackDiscovery, c.ClientIP())
 		resolvedBaseURL := ""
@@ -506,6 +525,29 @@ func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *ser
 		}
 		newNode.Metadata.Custom["callback_discovery"] = newNode.CallbackDiscovery
 
+		// Evaluate tag approval rules if the service is available and enabled.
+		// With default_mode=auto and no rules, this is a no-op (all tags auto-approved).
+		var tagApprovalResult *services.TagApprovalResult
+		if tagApprovalService != nil && tagApprovalService.IsEnabled() {
+			result := tagApprovalService.ProcessRegistrationTags(&newNode)
+			tagApprovalResult = &result
+			if len(result.Forbidden) > 0 {
+				c.JSON(http.StatusForbidden, gin.H{
+					"error":          "forbidden_tags",
+					"message":        "Registration rejected: agent proposes forbidden tags",
+					"forbidden_tags": result.Forbidden,
+				})
+				return
+			}
+			if !result.AllAutoApproved {
+				logger.Logger.Info().
+					Str("agent_id", newNode.ID).
+					Strs("pending_tags", result.ManualReview).
+					Strs("auto_approved", result.AutoApproved).
+					Msg("Agent registration requires tag approval")
+			}
+		}
+
 		// Store the new node
 		if err := storageProvider.RegisterAgent(ctx, &newNode); err != nil {
 			logger.Logger.Error().Err(err).Msg("❌ Storage error")
@@ -587,6 +629,15 @@ func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *ser
 
 		if newNode.CallbackDiscovery != nil {
 			responsePayload["callback_discovery"] = newNode.CallbackDiscovery
+		}
+
+		// Include tag approval status in response when agent is pending
+		if newNode.LifecycleStatus == types.AgentStatusPendingApproval && tagApprovalResult != nil {
+			responsePayload["status"] = "pending_approval"
+			responsePayload["message"] = "Node registered but awaiting tag approval"
+			responsePayload["proposed_tags"] = newNode.ProposedTags
+			responsePayload["pending_tags"] = tagApprovalResult.ManualReview
+			responsePayload["auto_approved_tags"] = tagApprovalResult.AutoApproved
 		}
 
 		c.JSON(http.StatusCreated, responsePayload)

@@ -43,12 +43,20 @@ this.http = axios.create({
     this.didAuthenticator = new DIDAuthenticator(config.did, config.privateKeyJwk);
   }
 
-  async register(payload: any) {
+  async register(payload: any): Promise<any> {
     const bodyStr = JSON.stringify(payload);
     const authHeaders = this.didAuthenticator.signRequest(Buffer.from(bodyStr));
-    await this.http.post('/api/v1/nodes/register', bodyStr, {
+    const res = await this.http.post('/api/v1/nodes/register', bodyStr, {
       headers: this.mergeHeaders({ 'Content-Type': 'application/json', ...authHeaders })
     });
+    return res.data;
+  }
+
+  async getNode(nodeId: string): Promise<any> {
+    const res = await this.http.get(`/api/v1/nodes/${encodeURIComponent(nodeId)}`, {
+      headers: this.mergeHeaders({})
+    });
+    return res.data;
   }
 
   async heartbeat(status: 'starting' | 'ready' | 'degraded' | 'offline' = 'ready'): Promise<HealthStatus> {

@@ -122,6 +122,16 @@ func (c *Client) RegisterNode(ctx context.Context, payload types.NodeRegistratio
 	return &resp, nil
 }
 
+// GetNode retrieves node information from the control plane.
+func (c *Client) GetNode(ctx context.Context, nodeID string) (map[string]interface{}, error) {
+	var resp map[string]interface{}
+	route := fmt.Sprintf("/api/v1/nodes/%s", url.PathEscape(nodeID))
+	if err := c.do(ctx, http.MethodGet, route, nil, &resp); err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
 // UpdateStatus renews the node lease and optionally reports lifecycle changes.
 func (c *Client) UpdateStatus(ctx context.Context, nodeID string, payload types.NodeStatusUpdate) (*types.LeaseResponse, error) {
 	var resp types.LeaseResponse

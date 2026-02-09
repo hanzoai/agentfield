@@ -248,13 +248,23 @@ func setupTestContext(t *testing.T) *testContext {
 	return tc
 }
 
-// createTestAgent creates a test agent in storage with the given ID and tags
+// createTestAgent creates a test agent in storage with the given ID and tags.
+// Tags are stored as approved tags (key:value format) for authorization matching.
+// Deployment metadata tags are excluded from authorization — only ApprovedTags
+// are used by CanonicalAgentTags for permission enforcement.
 func (tc *testContext) createTestAgent(agentID string, tags map[string]string) *types.AgentNode {
 	tc.t.Helper()
+
+	// Convert key:value tags to canonical approved tags
+	var approvedTags []string
+	for k, v := range tags {
+		approvedTags = append(approvedTags, k+":"+v)
+	}
 
 	agent := &types.AgentNode{
 		ID:             agentID,
 		DeploymentType: "test",
+		ApprovedTags:   approvedTags,
 		Metadata: types.AgentMetadata{
 			Deployment: &types.DeploymentMetadata{
 				Tags: tags,

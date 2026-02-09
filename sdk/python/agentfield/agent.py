@@ -405,6 +405,8 @@ class Agent(FastAPI):
         api_key: Optional[str] = None,
         enable_mcp: bool = False,
         enable_did: bool = True,
+        local_verification: bool = False,
+        verification_refresh_interval: int = 300,
         **kwargs,
     ):
         """
@@ -604,9 +606,26 @@ class Agent(FastAPI):
         if self._enable_did:
             self._initialize_did_system()
 
+        # Initialize local verification (decentralized verification)
+        self._local_verification_enabled = local_verification
+        self._local_verifier = None
+        self._realtime_validation_functions: Set[str] = set()
+        if local_verification:
+            from agentfield.verification import LocalVerifier
+            self._local_verifier = LocalVerifier(
+                agentfield_url=agentfield_server,
+                refresh_interval=verification_refresh_interval,
+                api_key=api_key,
+            )
+            log_info("Local verification enabled (decentralized mode)")
+
         # Setup standard AgentField routes and memory event listeners
         self.server_handler.setup_agentfield_routes()
         self._register_memory_event_listeners()
+
+        # Add local verification middleware if enabled
+        if self._local_verifier is not None:
+            self._add_local_verification_middleware()
 
         # Register this agent instance for automatic workflow tracking
         set_current_agent(self)
@@ -688,6 +707,7 @@ class Agent(FastAPI):
             "memory_config": self.memory_config.to_dict(),
             "return_type_hint": getattr(entry.output_type, "__name__", str(entry.output_type)),
             "tags": entry.tags,
+            "proposed_tags": entry.tags,
             "vc_enabled": entry.vc_enabled if entry.vc_enabled is not None else self._agent_vc_enabled,
         }
         return metadata
@@ -1501,6 +1521,7 @@ class Agent(FastAPI):
         tags: Optional[List[str]] = None,
         *,
         vc_enabled: Optional[bool] = None,
+        require_realtime_validation: bool = False,
     ):
         """
         Decorator to register a reasoner function.
@@ -1554,6 +1575,8 @@ class Agent(FastAPI):
 
             # Persist VC override preference
             self._set_reasoner_vc_override(reasoner_id, vc_enabled)
+            if require_realtime_validation:
+                self._realtime_validation_functions.add(reasoner_id)
 
             # Get output schema from return type hint
             return_type = type_hints.get("return", dict)
@@ -2009,6 +2032,7 @@ class Agent(FastAPI):
         name: Optional[str] = None,
         *,
         vc_enabled: Optional[bool] = None,
+        require_realtime_validation: bool = False,
     ):
         """
         Decorator to register a skill function.
@@ -2123,6 +2147,8 @@ class Agent(FastAPI):
             skill_id = decorator_name or func_name
             endpoint_path = decorator_path or f"/skills/{func_name}"
             self._set_skill_vc_override(skill_id, vc_enabled)
+            if require_realtime_validation:
+                self._realtime_validation_functions.add(skill_id)
 
             # Get type hints for input schema
             type_hints = get_type_hints(func)
@@ -3885,6 +3911,104 @@ class Agent(FastAPI):
         else:
             # Run in server mode
             self.serve(**serve_kwargs)
+
+    def _add_local_verification_middleware(self):
+        """Add FastAPI middleware for local DID signature verification."""
+        from starlette.middleware.base import BaseHTTPMiddleware
+        from starlette.responses import JSONResponse as StarletteJSONResponse
+
+        agent = self
+
+        class LocalVerificationMiddleware(BaseHTTPMiddleware):
+            async def dispatch(self, request, call_next):
+                path = request.url.path
+
+                # Only verify execution endpoints (reasoners and skills)
+                if not (path.startswith("/reasoners/") or path.startswith("/skills/")):
+                    return await call_next(request)
+
+                verifier = agent._local_verifier
+                if verifier is None:
+                    return await call_next(request)
+
+                # Extract function name from path
+                parts = path.strip("/").split("/")
+                function_name = parts[-1] if len(parts) >= 2 else ""
+
+                # Check if function requires realtime validation (skip local)
+                if function_name in agent._realtime_validation_functions:
+                    return await call_next(request)
+
+                # Refresh cache if stale
+                if verifier.needs_refresh:
+                    try:
+                        await verifier.refresh()
+                    except Exception as e:
+                        log_warn(f"Failed to refresh local verifier cache: {e}")
+
+                # Extract DID auth headers
+                caller_did = request.headers.get("X-Caller-DID", "")
+                signature = request.headers.get("X-DID-Signature", "")
+                timestamp = request.headers.get("X-DID-Timestamp", "")
+
+                # C4: DID authentication is required for all execution endpoints
+                if not caller_did:
+                    return StarletteJSONResponse(
+                        status_code=401,
+                        content={
+                            "error": "did_auth_required",
+                            "message": "DID authentication required for this endpoint",
+                        },
+                    )
+
+                # C5: Signature is required when caller DID is provided
+                if not signature:
+                    return StarletteJSONResponse(
+                        status_code=401,
+                        content={
+                            "error": "signature_required",
+                            "message": "DID signature required when caller DID is provided",
+                        },
+                    )
+
+                # Check revocation
+                if verifier.check_revocation(caller_did):
+                    return StarletteJSONResponse(
+                        status_code=403,
+                        content={
+                            "error": "did_revoked",
+                            "message": f"Caller DID {caller_did} has been revoked",
+                        },
+                    )
+
+                # Verify signature
+                body = await request.body()
+                if not verifier.verify_signature(
+                    caller_did, signature, timestamp, body
+                ):
+                    return StarletteJSONResponse(
+                        status_code=401,
+                        content={
+                            "error": "signature_invalid",
+                            "message": "DID signature verification failed",
+                        },
+                    )
+
+                # C6: Evaluate access policies
+                agent_tags = getattr(agent, 'agent_tags', []) or []
+                func_name = request.url.path.rstrip('/').split('/')[-1] if request.url.path else ''
+                if not verifier.evaluate_policy([], agent_tags, func_name, {}):
+                    return StarletteJSONResponse(
+                        status_code=403,
+                        content={
+                            "error": "policy_denied",
+                            "message": "Access denied by cached policy",
+                        },
+                    )
+
+                return await call_next(request)
+
+        self.add_middleware(LocalVerificationMiddleware)
 
     def serve(  # pragma: no cover - requires full server runtime integration
         self,

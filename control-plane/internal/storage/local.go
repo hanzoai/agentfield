@@ -4334,8 +4334,8 @@ func (ls *LocalStorage) executeRegisterAgent(ctx context.Context, q DBTX, agent 
 		INSERT INTO agent_nodes (
 			id, team_id, base_url, version, deployment_type, invocation_url, reasoners, skills,
 			communication_config, health_status, lifecycle_status, last_heartbeat,
-			registered_at, features, metadata
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			registered_at, features, metadata, proposed_tags, approved_tags
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			team_id = excluded.team_id,
 			base_url = excluded.base_url,
@@ -4349,7 +4349,9 @@ func (ls *LocalStorage) executeRegisterAgent(ctx context.Context, q DBTX, agent 
 			lifecycle_status = excluded.lifecycle_status,
 			last_heartbeat = excluded.last_heartbeat,
 			features = excluded.features,
-			metadata = excluded.metadata;`
+			metadata = excluded.metadata,
+			proposed_tags = excluded.proposed_tags,
+			approved_tags = excluded.approved_tags;`
 
 	reasonersJSON, err := json.Marshal(agent.Reasoners)
 	if err != nil {
@@ -4371,11 +4373,19 @@ func (ls *LocalStorage) executeRegisterAgent(ctx context.Context, q DBTX, agent 
 	if err != nil {
 		return fmt.Errorf("failed to marshal agent metadata: %w", err)
 	}
+	proposedTagsJSON, err := json.Marshal(agent.ProposedTags)
+	if err != nil {
+		return fmt.Errorf("failed to marshal proposed tags: %w", err)
+	}
+	approvedTagsJSON, err := json.Marshal(agent.ApprovedTags)
+	if err != nil {
+		return fmt.Errorf("failed to marshal approved tags: %w", err)
+	}
 
 	_, err = q.ExecContext(ctx, query,
 		agent.ID, agent.TeamID, agent.BaseURL, agent.Version, agent.DeploymentType, agent.InvocationURL,
 		reasonersJSON, skillsJSON, commConfigJSON, agent.HealthStatus, agent.LifecycleStatus,
-		agent.LastHeartbeat, agent.RegisteredAt, featuresJSON, metadataJSON,
+		agent.LastHeartbeat, agent.RegisteredAt, featuresJSON, metadataJSON, proposedTagsJSON, approvedTagsJSON,
 	)
 
 	if err != nil {
@@ -4396,13 +4406,14 @@ func (ls *LocalStorage) GetAgent(ctx context.Context, id string) (*types.AgentNo
 		SELECT
 			id, team_id, base_url, version, deployment_type, invocation_url, reasoners, skills,
 			communication_config, health_status, lifecycle_status, last_heartbeat,
-			registered_at, features, metadata
+			registered_at, features, metadata, proposed_tags, approved_tags
 		FROM agent_nodes WHERE id = ?`
 
 	row := ls.db.QueryRowContext(ctx, query, id)
 
 	agent := &types.AgentNode{}
 	var reasonersJSON, skillsJSON, commConfigJSON, featuresJSON, metadataJSON []byte
+	var proposedTagsJSON, approvedTagsJSON []byte
 	var healthStatusStr, lifecycleStatusStr string
 	var invocationURL sql.NullString
 
@@ -4410,6 +4421,7 @@ func (ls *LocalStorage) GetAgent(ctx context.Context, id string) (*types.AgentNo
 		&agent.ID, &agent.TeamID, &agent.BaseURL, &agent.Version, &agent.DeploymentType, &invocationURL,
 		&reasonersJSON, &skillsJSON, &commConfigJSON, &healthStatusStr, &lifecycleStatusStr,
 		&agent.LastHeartbeat, &agent.RegisteredAt, &featuresJSON, &metadataJSON,
+		&proposedTagsJSON, &approvedTagsJSON,
 	)
 
 	if err != nil {
@@ -4451,6 +4463,16 @@ func (ls *LocalStorage) GetAgent(ctx context.Context, id string) (*types.AgentNo
 			return nil, fmt.Errorf("failed to unmarshal agent metadata: %w", err)
 		}
 	}
+	if len(proposedTagsJSON) > 0 {
+		if err := json.Unmarshal(proposedTagsJSON, &agent.ProposedTags); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal agent proposed tags: %w", err)
+		}
+	}
+	if len(approvedTagsJSON) > 0 {
+		if err := json.Unmarshal(approvedTagsJSON, &agent.ApprovedTags); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal agent approved tags: %w", err)
+		}
+	}
 	if strings.TrimSpace(agent.DeploymentType) == "" {
 		if agent.InvocationURL != nil && strings.TrimSpace(*agent.InvocationURL) != "" {
 			agent.DeploymentType = "serverless"
@@ -4470,6 +4492,11 @@ func (ls *LocalStorage) GetAgent(ctx context.Context, id string) (*types.AgentNo
 		}
 	}
 
+	// Reconstruct agent-level ProposedTags and ApprovedTags from per-component fields.
+	// These fields are not stored in dedicated columns but are derived from the
+	// reasoners/skills JSON blobs.
+	reconstructAgentLevelTags(agent)
+
 	return agent, nil
 }
 
@@ -4484,7 +4511,7 @@ func (ls *LocalStorage) ListAgents(ctx context.Context, filters types.AgentFilte
 		SELECT
 			id, team_id, base_url, version, deployment_type, invocation_url, reasoners, skills,
 			communication_config, health_status, lifecycle_status, last_heartbeat,
-			registered_at, features, metadata
+			registered_at, features, metadata, proposed_tags, approved_tags
 		FROM agent_nodes`
 
 	var conditions []string
@@ -4527,6 +4554,7 @@ func (ls *LocalStorage) ListAgents(ctx context.Context, filters types.AgentFilte
 
 		agent := &types.AgentNode{}
 		var reasonersJSON, skillsJSON, commConfigJSON, featuresJSON, metadataJSON []byte
+		var proposedTagsJSON, approvedTagsJSON []byte
 		var healthStatusStr, lifecycleStatusStr string
 		var invocationURL sql.NullString
 
@@ -4534,6 +4562,7 @@ func (ls *LocalStorage) ListAgents(ctx context.Context, filters types.AgentFilte
 			&agent.ID, &agent.TeamID, &agent.BaseURL, &agent.Version, &agent.DeploymentType, &invocationURL,
 			&reasonersJSON, &skillsJSON, &commConfigJSON, &healthStatusStr, &lifecycleStatusStr,
 			&agent.LastHeartbeat, &agent.RegisteredAt, &featuresJSON, &metadataJSON,
+			&proposedTagsJSON, &approvedTagsJSON,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan agent node row: %w", err)
@@ -4571,6 +4600,16 @@ func (ls *LocalStorage) ListAgents(ctx context.Context, filters types.AgentFilte
 				return nil, fmt.Errorf("failed to unmarshal agent metadata: %w", err)
 			}
 		}
+		if len(proposedTagsJSON) > 0 {
+			if err := json.Unmarshal(proposedTagsJSON, &agent.ProposedTags); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal agent proposed tags: %w", err)
+			}
+		}
+		if len(approvedTagsJSON) > 0 {
+			if err := json.Unmarshal(approvedTagsJSON, &agent.ApprovedTags); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal agent approved tags: %w", err)
+			}
+		}
 		if strings.TrimSpace(agent.DeploymentType) == "" {
 			if agent.InvocationURL != nil && strings.TrimSpace(*agent.InvocationURL) != "" {
 				agent.DeploymentType = "serverless"
@@ -4590,6 +4629,7 @@ func (ls *LocalStorage) ListAgents(ctx context.Context, filters types.AgentFilte
 			}
 		}
 
+		reconstructAgentLevelTags(agent)
 		agents = append(agents, agent)
 	}
 
@@ -7964,4 +8004,548 @@ func (ls *LocalStorage) ListDIDDocuments(ctx context.Context) ([]*types.DIDDocum
 	}
 
 	return records, nil
+}
+
+// ListAgentsByLifecycleStatus lists agents filtered by lifecycle status.
+func (ls *LocalStorage) ListAgentsByLifecycleStatus(ctx context.Context, status types.AgentLifecycleStatus) ([]*types.AgentNode, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context cancelled during list agents by lifecycle status: %w", err)
+	}
+
+	query := `
+		SELECT
+			id, team_id, base_url, version, deployment_type, invocation_url, reasoners, skills,
+			communication_config, health_status, lifecycle_status, last_heartbeat,
+			registered_at, features, metadata, proposed_tags, approved_tags
+		FROM agent_nodes WHERE lifecycle_status = ? ORDER BY registered_at DESC`
+
+	rows, err := ls.db.QueryContext(ctx, query, string(status))
+	if err != nil {
+		return nil, fmt.Errorf("failed to list agents by lifecycle status: %w", err)
+	}
+	defer rows.Close()
+
+	agents := []*types.AgentNode{}
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("context cancelled during agent list iteration: %w", err)
+		}
+
+		agent := &types.AgentNode{}
+		var reasonersJSON, skillsJSON, commConfigJSON, featuresJSON, metadataJSON []byte
+		var proposedTagsJSON, approvedTagsJSON []byte
+		var healthStatusStr, lifecycleStatusStr string
+		var invocationURL sql.NullString
+
+		err := rows.Scan(
+			&agent.ID, &agent.TeamID, &agent.BaseURL, &agent.Version, &agent.DeploymentType, &invocationURL,
+			&reasonersJSON, &skillsJSON, &commConfigJSON, &healthStatusStr, &lifecycleStatusStr,
+			&agent.LastHeartbeat, &agent.RegisteredAt, &featuresJSON, &metadataJSON,
+			&proposedTagsJSON, &approvedTagsJSON,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan agent node row: %w", err)
+		}
+
+		agent.HealthStatus = types.HealthStatus(healthStatusStr)
+		agent.LifecycleStatus = types.AgentLifecycleStatus(lifecycleStatusStr)
+		if invocationURL.Valid && strings.TrimSpace(invocationURL.String) != "" {
+			url := strings.TrimSpace(invocationURL.String)
+			agent.InvocationURL = &url
+		}
+
+		if len(reasonersJSON) > 0 {
+			if err := json.Unmarshal(reasonersJSON, &agent.Reasoners); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal agent reasoners: %w", err)
+			}
+		}
+		if len(skillsJSON) > 0 {
+			if err := json.Unmarshal(skillsJSON, &agent.Skills); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal agent skills: %w", err)
+			}
+		}
+		if len(commConfigJSON) > 0 {
+			if err := json.Unmarshal(commConfigJSON, &agent.CommunicationConfig); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal agent communication config: %w", err)
+			}
+		}
+		if len(featuresJSON) > 0 {
+			if err := json.Unmarshal(featuresJSON, &agent.Features); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal agent features: %w", err)
+			}
+		}
+		if len(metadataJSON) > 0 {
+			if err := json.Unmarshal(metadataJSON, &agent.Metadata); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal agent metadata: %w", err)
+			}
+		}
+		if len(proposedTagsJSON) > 0 {
+			if err := json.Unmarshal(proposedTagsJSON, &agent.ProposedTags); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal agent proposed tags: %w", err)
+			}
+		}
+		if len(approvedTagsJSON) > 0 {
+			if err := json.Unmarshal(approvedTagsJSON, &agent.ApprovedTags); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal agent approved tags: %w", err)
+			}
+		}
+
+		reconstructAgentLevelTags(agent)
+		agents = append(agents, agent)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating agents: %w", err)
+	}
+
+	return agents, nil
+}
+
+// reconstructAgentLevelTags ensures agent-level ProposedTags and ApprovedTags
+// are populated. If the dedicated DB columns were empty (e.g., on older records),
+// it reconstructs them from per-reasoner/per-skill fields as a fallback.
+func reconstructAgentLevelTags(agent *types.AgentNode) {
+	// Only reconstruct if DB columns were empty
+	if len(agent.ApprovedTags) == 0 {
+		seen := make(map[string]struct{})
+		for _, r := range agent.Reasoners {
+			for _, t := range r.ApprovedTags {
+				if _, exists := seen[t]; !exists {
+					seen[t] = struct{}{}
+					agent.ApprovedTags = append(agent.ApprovedTags, t)
+				}
+			}
+		}
+		for _, sk := range agent.Skills {
+			for _, t := range sk.ApprovedTags {
+				if _, exists := seen[t]; !exists {
+					seen[t] = struct{}{}
+					agent.ApprovedTags = append(agent.ApprovedTags, t)
+				}
+			}
+		}
+	}
+
+	if len(agent.ProposedTags) == 0 {
+		proposedSeen := make(map[string]struct{})
+		for _, r := range agent.Reasoners {
+			source := r.ProposedTags
+			if len(source) == 0 {
+				source = r.Tags
+			}
+			for _, t := range source {
+				if _, exists := proposedSeen[t]; !exists {
+					proposedSeen[t] = struct{}{}
+					agent.ProposedTags = append(agent.ProposedTags, t)
+				}
+			}
+		}
+		for _, sk := range agent.Skills {
+			source := sk.ProposedTags
+			if len(source) == 0 {
+				source = sk.Tags
+			}
+			for _, t := range source {
+				if _, exists := proposedSeen[t]; !exists {
+					proposedSeen[t] = struct{}{}
+					agent.ProposedTags = append(agent.ProposedTags, t)
+				}
+			}
+		}
+	}
+}
+
+// ============================================================================
+// Access Policy Storage
+// ============================================================================
+
+// GetAccessPolicies retrieves all enabled access policies, sorted by priority descending.
+func (ls *LocalStorage) GetAccessPolicies(ctx context.Context) ([]*types.AccessPolicy, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context cancelled during get access policies: %w", err)
+	}
+
+	query := `
+		SELECT id, name, caller_tags, target_tags, allow_functions, deny_functions,
+		       constraints, action, priority, enabled, description, created_at, updated_at
+		FROM access_policies WHERE enabled = true ORDER BY priority DESC, created_at DESC`
+
+	rows, err := ls.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get access policies: %w", err)
+	}
+	defer rows.Close()
+
+	var policies []*types.AccessPolicy
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("context cancelled during scan: %w", err)
+		}
+
+		policy, err := scanAccessPolicy(rows)
+		if err != nil {
+			return nil, err
+		}
+		policies = append(policies, policy)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating access policies: %w", err)
+	}
+
+	return policies, nil
+}
+
+// GetAccessPolicyByID retrieves a single access policy by its ID.
+func (ls *LocalStorage) GetAccessPolicyByID(ctx context.Context, id int64) (*types.AccessPolicy, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context cancelled during get access policy: %w", err)
+	}
+
+	query := `
+		SELECT id, name, caller_tags, target_tags, allow_functions, deny_functions,
+		       constraints, action, priority, enabled, description, created_at, updated_at
+		FROM access_policies WHERE id = ?`
+
+	row := ls.db.QueryRowContext(ctx, query, id)
+
+	policy := &types.AccessPolicy{}
+	var callerTagsJSON, targetTagsJSON, allowFuncsJSON, denyFuncsJSON, constraintsJSON string
+	var description sql.NullString
+
+	err := row.Scan(
+		&policy.ID, &policy.Name, &callerTagsJSON, &targetTagsJSON,
+		&allowFuncsJSON, &denyFuncsJSON, &constraintsJSON,
+		&policy.Action, &policy.Priority, &policy.Enabled, &description,
+		&policy.CreatedAt, &policy.UpdatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("access policy with ID %d not found: %w", id, err)
+	}
+
+	if description.Valid {
+		policy.Description = &description.String
+	}
+	if err := unmarshalAccessPolicyJSON(policy, callerTagsJSON, targetTagsJSON, allowFuncsJSON, denyFuncsJSON, constraintsJSON); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal access policy %d: %w", id, err)
+	}
+
+	return policy, nil
+}
+
+// CreateAccessPolicy creates a new access policy.
+func (ls *LocalStorage) CreateAccessPolicy(ctx context.Context, policy *types.AccessPolicy) error {
+	if ls.mode == "postgres" {
+		return ls.createAccessPolicyPostgres(ctx, policy)
+	}
+
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during create access policy: %w", err)
+	}
+
+	callerTagsJSON, targetTagsJSON, allowFuncsJSON, denyFuncsJSON, constraintsJSON, err := marshalAccessPolicyJSON(policy)
+	if err != nil {
+		return fmt.Errorf("failed to marshal access policy fields: %w", err)
+	}
+
+	query := `
+		INSERT INTO access_policies (
+			name, caller_tags, target_tags, allow_functions, deny_functions,
+			constraints, action, priority, enabled, description, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+	result, err := ls.db.ExecContext(ctx, query,
+		policy.Name, callerTagsJSON, targetTagsJSON,
+		allowFuncsJSON, denyFuncsJSON, constraintsJSON,
+		policy.Action, policy.Priority, policy.Enabled, policy.Description,
+		policy.CreatedAt, policy.UpdatedAt,
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint") {
+			return fmt.Errorf("access policy with name %q already exists", policy.Name)
+		}
+		return fmt.Errorf("failed to create access policy: %w", err)
+	}
+
+	id, err := result.LastInsertId()
+	if err == nil {
+		policy.ID = id
+	}
+
+	return nil
+}
+
+// createAccessPolicyPostgres creates an access policy using PostgreSQL's RETURNING clause.
+func (ls *LocalStorage) createAccessPolicyPostgres(ctx context.Context, policy *types.AccessPolicy) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during create access policy: %w", err)
+	}
+
+	callerTagsJSON, targetTagsJSON, allowFuncsJSON, denyFuncsJSON, constraintsJSON, err := marshalAccessPolicyJSON(policy)
+	if err != nil {
+		return fmt.Errorf("failed to marshal access policy fields: %w", err)
+	}
+
+	query := `
+		INSERT INTO access_policies (
+			name, caller_tags, target_tags, allow_functions, deny_functions,
+			constraints, action, priority, enabled, description, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		RETURNING id`
+
+	row := ls.db.DB.QueryRowContext(ctx, query,
+		policy.Name, callerTagsJSON, targetTagsJSON,
+		allowFuncsJSON, denyFuncsJSON, constraintsJSON,
+		policy.Action, policy.Priority, policy.Enabled, policy.Description,
+		policy.CreatedAt, policy.UpdatedAt,
+	)
+
+	if err := row.Scan(&policy.ID); err != nil {
+		if strings.Contains(err.Error(), "duplicate key") {
+			return fmt.Errorf("access policy with name %q already exists", policy.Name)
+		}
+		return fmt.Errorf("failed to create access policy: %w", err)
+	}
+
+	return nil
+}
+
+// UpdateAccessPolicy updates an existing access policy.
+func (ls *LocalStorage) UpdateAccessPolicy(ctx context.Context, policy *types.AccessPolicy) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during update access policy: %w", err)
+	}
+
+	callerTagsJSON, targetTagsJSON, allowFuncsJSON, denyFuncsJSON, constraintsJSON, err := marshalAccessPolicyJSON(policy)
+	if err != nil {
+		return fmt.Errorf("failed to marshal access policy fields: %w", err)
+	}
+
+	query := `
+		UPDATE access_policies SET
+			name = ?, caller_tags = ?, target_tags = ?, allow_functions = ?,
+			deny_functions = ?, constraints = ?, action = ?, priority = ?,
+			enabled = ?, description = ?, updated_at = ?
+		WHERE id = ?`
+
+	result, err := ls.db.ExecContext(ctx, query,
+		policy.Name, callerTagsJSON, targetTagsJSON,
+		allowFuncsJSON, denyFuncsJSON, constraintsJSON,
+		policy.Action, policy.Priority, policy.Enabled, policy.Description,
+		policy.UpdatedAt, policy.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update access policy: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("access policy with ID %d not found", policy.ID)
+	}
+
+	return nil
+}
+
+// DeleteAccessPolicy deletes an access policy by ID.
+func (ls *LocalStorage) DeleteAccessPolicy(ctx context.Context, id int64) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during delete access policy: %w", err)
+	}
+
+	query := `DELETE FROM access_policies WHERE id = ?`
+
+	result, err := ls.db.ExecContext(ctx, query, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete access policy: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("access policy with ID %d not found", id)
+	}
+
+	return nil
+}
+
+// scanAccessPolicy scans a row into an AccessPolicy struct.
+func scanAccessPolicy(rows *sql.Rows) (*types.AccessPolicy, error) {
+	policy := &types.AccessPolicy{}
+	var callerTagsJSON, targetTagsJSON, allowFuncsJSON, denyFuncsJSON, constraintsJSON string
+	var description sql.NullString
+
+	err := rows.Scan(
+		&policy.ID, &policy.Name, &callerTagsJSON, &targetTagsJSON,
+		&allowFuncsJSON, &denyFuncsJSON, &constraintsJSON,
+		&policy.Action, &policy.Priority, &policy.Enabled, &description,
+		&policy.CreatedAt, &policy.UpdatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan access policy: %w", err)
+	}
+
+	if description.Valid {
+		policy.Description = &description.String
+	}
+	if err := unmarshalAccessPolicyJSON(policy, callerTagsJSON, targetTagsJSON, allowFuncsJSON, denyFuncsJSON, constraintsJSON); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal access policy %d: %w", policy.ID, err)
+	}
+
+	return policy, nil
+}
+
+// unmarshalAccessPolicyJSON populates the JSON fields of an AccessPolicy.
+// Returns an error if any JSON field cannot be deserialized, preventing
+// corrupted data from silently producing empty policy rules.
+func unmarshalAccessPolicyJSON(policy *types.AccessPolicy, callerTags, targetTags, allowFuncs, denyFuncs, constraints string) error {
+	if callerTags != "" {
+		if err := json.Unmarshal([]byte(callerTags), &policy.CallerTags); err != nil {
+			return fmt.Errorf("failed to unmarshal caller_tags: %w", err)
+		}
+	}
+	if targetTags != "" {
+		if err := json.Unmarshal([]byte(targetTags), &policy.TargetTags); err != nil {
+			return fmt.Errorf("failed to unmarshal target_tags: %w", err)
+		}
+	}
+	if allowFuncs != "" {
+		if err := json.Unmarshal([]byte(allowFuncs), &policy.AllowFunctions); err != nil {
+			return fmt.Errorf("failed to unmarshal allow_functions: %w", err)
+		}
+	}
+	if denyFuncs != "" {
+		if err := json.Unmarshal([]byte(denyFuncs), &policy.DenyFunctions); err != nil {
+			return fmt.Errorf("failed to unmarshal deny_functions: %w", err)
+		}
+	}
+	if constraints != "" {
+		if err := json.Unmarshal([]byte(constraints), &policy.Constraints); err != nil {
+			return fmt.Errorf("failed to unmarshal constraints: %w", err)
+		}
+	}
+	return nil
+}
+
+// marshalAccessPolicyJSON serializes the JSON fields of an AccessPolicy for storage.
+func marshalAccessPolicyJSON(policy *types.AccessPolicy) (callerTags, targetTags, allowFuncs, denyFuncs, constraints string, err error) {
+	ct, err := json.Marshal(policy.CallerTags)
+	if err != nil {
+		return "", "", "", "", "", fmt.Errorf("caller_tags: %w", err)
+	}
+	tt, err := json.Marshal(policy.TargetTags)
+	if err != nil {
+		return "", "", "", "", "", fmt.Errorf("target_tags: %w", err)
+	}
+	af, err := json.Marshal(policy.AllowFunctions)
+	if err != nil {
+		return "", "", "", "", "", fmt.Errorf("allow_functions: %w", err)
+	}
+	df, err := json.Marshal(policy.DenyFunctions)
+	if err != nil {
+		return "", "", "", "", "", fmt.Errorf("deny_functions: %w", err)
+	}
+	cn, err := json.Marshal(policy.Constraints)
+	if err != nil {
+		return "", "", "", "", "", fmt.Errorf("constraints: %w", err)
+	}
+	return string(ct), string(tt), string(af), string(df), string(cn), nil
+}
+
+// ========== Agent Tag VC operations ==========
+
+// StoreAgentTagVC stores or replaces an agent's tag VC.
+func (ls *LocalStorage) StoreAgentTagVC(ctx context.Context, agentID, agentDID, vcID, vcDocument, signature string, issuedAt time.Time, expiresAt *time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during store agent tag VC: %w", err)
+	}
+
+	query := `
+		INSERT INTO agent_tag_vcs (agent_id, agent_did, vc_id, vc_document, signature, issued_at, expires_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(agent_id) DO UPDATE SET
+			agent_did = excluded.agent_did,
+			vc_id = excluded.vc_id,
+			vc_document = excluded.vc_document,
+			signature = excluded.signature,
+			issued_at = excluded.issued_at,
+			expires_at = excluded.expires_at,
+			revoked_at = NULL,
+			updated_at = excluded.updated_at`
+
+	now := time.Now()
+	_, err := ls.db.ExecContext(ctx, query, agentID, agentDID, vcID, vcDocument, signature, issuedAt, expiresAt, now, now)
+	if err != nil {
+		return fmt.Errorf("failed to store agent tag VC: %w", err)
+	}
+	return nil
+}
+
+// GetAgentTagVC retrieves an agent's tag VC record.
+func (ls *LocalStorage) GetAgentTagVC(ctx context.Context, agentID string) (*types.AgentTagVCRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context cancelled during get agent tag VC: %w", err)
+	}
+
+	query := `
+		SELECT id, agent_id, agent_did, vc_id, vc_document, signature, issued_at, expires_at, revoked_at
+		FROM agent_tag_vcs WHERE agent_id = ?`
+
+	row := ls.db.QueryRowContext(ctx, query, agentID)
+
+	record := &types.AgentTagVCRecord{}
+	var expiresAt, revokedAt sql.NullTime
+	var signature sql.NullString
+
+	err := row.Scan(
+		&record.ID, &record.AgentID, &record.AgentDID, &record.VCID,
+		&record.VCDocument, &signature, &record.IssuedAt, &expiresAt, &revokedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("agent tag VC not found for agent %s", agentID)
+		}
+		return nil, fmt.Errorf("failed to get agent tag VC: %w", err)
+	}
+
+	if signature.Valid {
+		record.Signature = signature.String
+	}
+	if expiresAt.Valid {
+		record.ExpiresAt = &expiresAt.Time
+	}
+	if revokedAt.Valid {
+		record.RevokedAt = &revokedAt.Time
+	}
+
+	return record, nil
+}
+
+// RevokeAgentTagVC marks an agent's tag VC as revoked.
+func (ls *LocalStorage) RevokeAgentTagVC(ctx context.Context, agentID string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled during revoke agent tag VC: %w", err)
+	}
+
+	query := `UPDATE agent_tag_vcs SET revoked_at = ?, updated_at = ? WHERE agent_id = ? AND revoked_at IS NULL`
+
+	now := time.Now()
+	result, err := ls.db.ExecContext(ctx, query, now, now, agentID)
+	if err != nil {
+		return fmt.Errorf("failed to revoke agent tag VC: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("no active agent tag VC found for agent %s", agentID)
+	}
+
+	return nil
 }

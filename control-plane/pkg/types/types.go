@@ -178,6 +178,10 @@ type AgentNode struct {
 
 	Features AgentFeatures `json:"features" db:"features"`
 	Metadata AgentMetadata `json:"metadata" db:"metadata"`
+
+	// Tag approval fields
+	ProposedTags []string `json:"proposed_tags,omitempty" db:"proposed_tags"`
+	ApprovedTags []string `json:"approved_tags,omitempty" db:"approved_tags"`
 }
 
 // CallbackDiscoveryInfo captures how the AgentField server resolved an agent callback URL.
@@ -207,13 +211,17 @@ type ReasonerDefinition struct {
 	OutputSchema json.RawMessage `json:"output_schema"`
 	MemoryConfig MemoryConfig    `json:"memory_config"`
 	Tags         []string        `json:"tags,omitempty"`
+	ProposedTags []string        `json:"proposed_tags,omitempty"`
+	ApprovedTags []string        `json:"approved_tags,omitempty"`
 }
 
 // SkillDefinition defines a skill provided by an agent node.
 type SkillDefinition struct {
-	ID          string          `json:"id"`
-	InputSchema json.RawMessage `json:"input_schema"`
-	Tags        []string        `json:"tags"`
+	ID           string          `json:"id"`
+	InputSchema  json.RawMessage `json:"input_schema"`
+	Tags         []string        `json:"tags"`
+	ProposedTags []string        `json:"proposed_tags,omitempty"`
+	ApprovedTags []string        `json:"approved_tags,omitempty"`
 }
 
 // MemoryConfig defines memory configuration for a reasoner.
@@ -244,10 +252,11 @@ const (
 type AgentLifecycleStatus string
 
 const (
-	AgentStatusStarting AgentLifecycleStatus = "starting" // Initializing (covers registering + initializing)
-	AgentStatusReady    AgentLifecycleStatus = "ready"    // Fully operational
-	AgentStatusDegraded AgentLifecycleStatus = "degraded" // Partial functionality
-	AgentStatusOffline  AgentLifecycleStatus = "offline"  // Not responding
+	AgentStatusStarting        AgentLifecycleStatus = "starting"         // Initializing (covers registering + initializing)
+	AgentStatusReady           AgentLifecycleStatus = "ready"            // Fully operational
+	AgentStatusDegraded        AgentLifecycleStatus = "degraded"         // Partial functionality
+	AgentStatusOffline         AgentLifecycleStatus = "offline"          // Not responding
+	AgentStatusPendingApproval AgentLifecycleStatus = "pending_approval" // Waiting for admin tag approval
 )
 
 // AgentStatus represents the unified status model for agent nodes.

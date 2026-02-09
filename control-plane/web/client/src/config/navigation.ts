@@ -98,6 +98,20 @@ export const navigationSections: NavigationSection[] = [
         href: '/permissions/protected-agents',
         icon: 'lock',
         description: 'Configure which agents require permission to call'
+      },
+      {
+        id: 'tag-approval',
+        label: 'Tag Approvals',
+        href: '/permissions/tag-approval',
+        icon: 'shield-check',
+        description: 'Review and approve agent tag registrations'
+      },
+      {
+        id: 'access-policies',
+        label: 'Access Policies',
+        href: '/permissions/access-policies',
+        icon: 'settings',
+        description: 'Manage tag-based access policies for cross-agent calls'
       }
     ]
   },

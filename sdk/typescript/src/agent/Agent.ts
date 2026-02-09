@@ -37,6 +37,7 @@ import type { DiscoveryOptions } from '../types/agent.js';
 import type { MCPToolRegistration } from '../types/mcp.js';
 import { MCPClientRegistry } from '../mcp/MCPClientRegistry.js';
 import { MCPToolRegistrar } from '../mcp/MCPToolRegistrar.js';
+import { LocalVerifier } from '../verification/LocalVerifier.js';
 
 class TargetNotFoundError extends Error {}
 
@@ -56,6 +57,8 @@ export class Agent {
   private readonly memoryWatchers: Array<{ pattern: string; handler: MemoryWatchHandler; scope?: string; scopeId?: string }> = [];
   private readonly mcpClientRegistry?: MCPClientRegistry;
   private readonly mcpToolRegistrar?: MCPToolRegistrar;
+  private readonly localVerifier?: LocalVerifier;
+  private readonly realtimeValidationFunctions = new Set<string>();
 
   constructor(config: AgentConfig) {
     const mcp = config.mcp
@@ -96,6 +99,16 @@ export class Agent {
       this.mcpToolRegistrar.registerServers(this.config.mcp.servers);
     }
 
+    // Initialize local verifier for decentralized verification
+    if (this.config.localVerification && this.config.agentFieldUrl) {
+      this.localVerifier = new LocalVerifier(
+        this.config.agentFieldUrl,
+        this.config.verificationRefreshInterval ?? 300,
+        300,
+        this.config.apiKey,
+      );
+    }
+
     this.registerDefaultRoutes();
   }
 
@@ -105,6 +118,9 @@ export class Agent {
     options?: ReasonerOptions
   ) {
     this.reasoners.register(name, handler, options);
+    if (options?.requireRealtimeValidation) {
+      this.realtimeValidationFunctions.add(name);
+    }
     return this;
   }
 
@@ -114,6 +130,9 @@ export class Agent {
     options?: SkillOptions
   ) {
     this.skills.register(name, handler, options);
+    if (options?.requireRealtimeValidation) {
+      this.realtimeValidationFunctions.add(name);
+    }
     return this;
   }
 
@@ -247,6 +266,19 @@ export class Agent {
     }
 
     await this.registerWithControlPlane();
+
+    // Perform a blocking initial refresh for local verification before accepting requests
+    if (this.localVerifier) {
+      try {
+        const ok = await this.localVerifier.refresh();
+        if (!ok) {
+          console.warn('[LocalVerifier] Initial refresh partially failed — some verification data may be stale');
+        }
+      } catch (err) {
+        console.warn('[LocalVerifier] Initial refresh failed:', err);
+      }
+    }
+
     const port = this.config.port ?? 8001;
     const host = this.config.host ?? '0.0.0.0';
     // First heartbeat marks the node as starting; subsequent interval sets ready.
@@ -410,6 +442,102 @@ export class Agent {
     this.app.get('/skills', (_req, res) => {
       res.json(this.skills.all().map((s) => s.name));
     });
+
+    // Local verification middleware for execution endpoints
+    if (this.localVerifier) {
+      const verifier = this.localVerifier;
+      const realtimeFunctions = this.realtimeValidationFunctions;
+
+      this.app.use(async (req, res, next) => {
+        const path = req.path;
+
+        // Only verify execution endpoints
+        if (!path.startsWith('/reasoners/') && !path.startsWith('/skills/') &&
+            !path.startsWith('/execute') && !path.startsWith('/api/v1/reasoners/') &&
+            !path.startsWith('/api/v1/skills/')) {
+          return next();
+        }
+
+        // Extract function name
+        const parts = path.replace(/^\/+/, '').split('/');
+        const funcName = parts[parts.length - 1] ?? '';
+
+        // Skip for realtime-validated functions
+        if (realtimeFunctions.has(funcName)) {
+          return next();
+        }
+
+        // Refresh cache if stale (non-blocking but log errors)
+        if (verifier.needsRefresh) {
+          verifier.refresh().catch((err) => {
+            console.warn('[LocalVerifier] Background refresh failed:', err);
+          });
+        }
+
+        // Extract DID auth headers
+        const callerDid = req.headers['x-caller-did'] as string | undefined;
+        const signature = req.headers['x-did-signature'] as string | undefined;
+        const timestamp = req.headers['x-did-timestamp'] as string | undefined;
+
+        // C4: Require DID authentication — fail closed when callerDid is missing
+        if (!callerDid) {
+          return res.status(401).json({
+            error: 'did_auth_required',
+            message: 'DID authentication required',
+          });
+        }
+
+        // Check revocation
+        if (verifier.checkRevocation(callerDid)) {
+          return res.status(403).json({
+            error: 'did_revoked',
+            message: `Caller DID ${callerDid} has been revoked`,
+          });
+        }
+
+        // C5: Require signature when callerDid is present
+        if (!signature) {
+          return res.status(401).json({
+            error: 'signature_required',
+            message: 'DID signature required',
+          });
+        }
+
+        // Verify signature
+        if (timestamp) {
+          const body = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body));
+          const valid = await verifier.verifySignature(callerDid, signature, timestamp, body);
+          if (!valid) {
+            return res.status(401).json({
+              error: 'signature_invalid',
+              message: 'DID signature verification failed',
+            });
+          }
+        } else {
+          // Timestamp is required for signature verification
+          return res.status(401).json({
+            error: 'signature_invalid',
+            message: 'DID signature verification failed: missing timestamp',
+          });
+        }
+
+        // C6: Evaluate access policy after successful signature verification
+        const allowed = verifier.evaluatePolicy(
+          [],        // caller tags (not available at middleware level)
+          [],        // target tags (agent's own tags — not available at middleware level)
+          funcName,
+          typeof req.body === 'object' && req.body !== null ? req.body : {},
+        );
+        if (!allowed) {
+          return res.status(403).json({
+            error: 'policy_denied',
+            message: 'Access denied by policy',
+          });
+        }
+
+        next();
+      });
+    }
 
     this.app.post('/api/v1/reasoners/*', (req, res) => this.executeReasoner(req, res, (req.params as any)[0]));
     this.app.post('/reasoners/:name', (req, res) => this.executeReasoner(req, res, req.params.name));
@@ -747,25 +875,33 @@ export class Agent {
   }
 
   private reasonerDefinitions() {
-    return this.reasoners.all().map((r) => ({
-      id: r.name,
-      input_schema: toJsonSchema(r.options?.inputSchema),
-      output_schema: toJsonSchema(r.options?.outputSchema),
-      memory_config: r.options?.memoryConfig ?? {
-        auto_inject: [] as string[],
-        memory_retention: '',
-        cache_results: false
-      },
-      tags: r.options?.tags ?? []
-    }));
+    return this.reasoners.all().map((r) => {
+      const tags = r.options?.tags ?? [];
+      return {
+        id: r.name,
+        input_schema: toJsonSchema(r.options?.inputSchema),
+        output_schema: toJsonSchema(r.options?.outputSchema),
+        memory_config: r.options?.memoryConfig ?? {
+          auto_inject: [] as string[],
+          memory_retention: '',
+          cache_results: false
+        },
+        tags,
+        proposed_tags: tags
+      };
+    });
   }
 
   private skillDefinitions() {
-    return this.skills.all().map((s) => ({
-      id: s.name,
-      input_schema: toJsonSchema(s.options?.inputSchema),
-      tags: s.options?.tags ?? []
-    }));
+    return this.skills.all().map((s) => {
+      const tags = s.options?.tags ?? [];
+      return {
+        id: s.name,
+        input_schema: toJsonSchema(s.options?.inputSchema),
+        tags,
+        proposed_tags: tags
+      };
+    });
   }
 
   private discoveryPayload(deploymentType: DeploymentType) {
@@ -937,7 +1073,7 @@ export class Agent {
       const publicUrl =
         this.config.publicUrl ?? `http://${hostForUrl ?? '127.0.0.1'}:${port}`;
 
-      await this.agentFieldClient.register({
+      const regResponse = await this.agentFieldClient.register({
         id: this.config.nodeId,
         version: this.config.version,
         base_url: publicUrl,
@@ -946,6 +1082,14 @@ export class Agent {
         reasoners,
         skills
       });
+
+      // Handle pending approval state: poll until approved
+      if (regResponse?.status === 'pending_approval') {
+        const pendingTags = regResponse.pending_tags ?? [];
+        console.log(`[AgentField] Node ${this.config.nodeId} registered but awaiting tag approval (pending tags: ${pendingTags.join(', ')})`);
+        await this.waitForApproval();
+        console.log(`[AgentField] Node ${this.config.nodeId} tag approval granted`);
+      }
 
       // Register with DID system if enabled
       if (this.config.didEnabled) {
@@ -975,6 +1119,30 @@ export class Agent {
       }
       console.warn('Control plane registration failed (devMode=true), continuing locally', err);
     }
+  }
+
+  private async waitForApproval(): Promise<void> {
+    const pollInterval = 5000; // 5 seconds
+    const timeoutMs = 5 * 60 * 1000; // 5 minutes
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, pollInterval));
+      try {
+        const node = await this.agentFieldClient.getNode(this.config.nodeId);
+        const status = node?.lifecycle_status;
+        if (status && status !== 'pending_approval') {
+          return;
+        }
+        console.log(`[AgentField] Node ${this.config.nodeId} still pending approval...`);
+      } catch (err) {
+        console.warn('[AgentField] Polling for approval status failed:', err);
+      }
+    }
+
+    throw new Error(
+      `[AgentField] Node ${this.config.nodeId} approval timed out after ${timeoutMs / 1000}s`
+    );
   }
 
   private startHeartbeat() {

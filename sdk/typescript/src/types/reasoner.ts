@@ -17,4 +17,6 @@ export interface ReasonerOptions {
   outputSchema?: any;
   trackWorkflow?: boolean;
   memoryConfig?: any;
+  /** Force control-plane verification instead of local verification for this reasoner. */
+  requireRealtimeValidation?: boolean;
 }

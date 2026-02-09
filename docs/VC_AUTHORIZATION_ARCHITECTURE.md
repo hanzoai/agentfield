@@ -1,6 +1,6 @@
 # VC-Based Authorization Architecture
 
-**Version:** 1.1
+**Version:** 1.2
 **Status:** Implementation
 **Date:** February 2026
 
@@ -11,7 +11,10 @@
 This document describes the Verifiable Credential (VC) based authorization system for AgentField. This system provides a self-service permission request and admin approval workflow for controlling inter-agent communication.
 
 **Key Principles:**
-- Agents self-assign tags (identity only, no approval needed)
+- Agents propose tags at registration; admin controls which tags require approval
+- Default mode is `auto` (all tags auto-approved) for zero-disruption backward compatibility
+- Tags requiring `manual` approval put agents into `pending_approval` state until admin reviews
+- `forbidden` tags reject registration outright
 - Protected agents are defined via config file (pattern-based rules)
 - Agents declare dependencies at registration → creates permission requests proactively
 - Calling protected agents requires admin approval via UI
@@ -148,27 +151,50 @@ Admin can revoke permissions at any time. Next call will fail.
 
 ### 1. Agent Identity (Tags)
 
-Agents declare their identity through self-assigned tags. **No approval is needed for tag assignment.** Tags are informational only - they help admins understand what kind of agent is requesting access.
+Agents propose tags at registration. Tags serve dual purposes: identity declaration and authorization scope. The control plane evaluates proposed tags against configurable approval rules.
 
 ```python
 # Python SDK
 app = Agent(
     node_id="finance-bot",
-    tags=["finance", "reporting"]  # Self-declared identity (informational)
+    tags=["finance", "reporting"]  # Proposed tags (sent as proposed_tags)
 )
 
-@app.skill(tags=["pci-compliant"])  # Additional skill-level tags
+@app.reasoner(tags=["pci-compliant"])  # Per-reasoner tags
 def process_payment():
     ...
 ```
 
+```go
+// Go SDK
+agent.RegisterReasoner("payment", handler,
+    agent.WithReasonerTags("pci-compliant", "finance"),
+)
+```
+
+**Tag Lifecycle:**
+
+| Stage | Field | Description |
+|-------|-------|-------------|
+| Registration | `proposed_tags` | Tags the developer wants |
+| Evaluation | Tag approval rules | Control plane checks each tag against rules |
+| Approved | `approved_tags` | Tags the admin (or auto-approval) grants |
+| Runtime | `CanonicalAgentTags()` | Prefers `approved_tags`, falls back to `tags` |
+
+**Tag Approval Modes:**
+
+| Mode | Behavior |
+|------|----------|
+| `auto` (default) | Tags auto-approved, agent proceeds immediately |
+| `manual` | Agent enters `pending_approval` state, waits for admin review |
+| `forbidden` | Registration rejected outright |
+
 Tags serve as:
 - **Identity declaration** - "I am a finance agent"
 - **Capability advertisement** - "I handle PCI-compliant operations"
+- **Authorization scope** - Determines which policies apply (Phase 2)
 - **Discovery metadata** - Other agents can find me by tags
-- **Admin context** - Helps admin decide whether to approve permission requests
-
-**Important:** The system does NOT auto-enforce based on caller tags. Tags don't grant or restrict permissions - they're purely informational for admin review.
+- **Admin context** - Helps admin decide whether to approve
 
 ### 2. Dependency Declaration
 
@@ -492,6 +518,77 @@ Response 200:
 }
 ```
 
+### Tag Approval Admin Endpoints
+
+#### List Pending Agents
+```http
+GET /api/v1/admin/agents/pending
+
+Response 200:
+{
+  "agents": [
+    {
+      "agent_id": "finance-bot",
+      "proposed_tags": ["finance", "reporting", "admin"],
+      "approved_tags": ["finance", "reporting"],
+      "status": "pending_approval",
+      "registered_at": "2026-02-08T12:00:00Z"
+    }
+  ],
+  "total": 1
+}
+```
+
+#### Approve Agent Tags
+```http
+POST /api/v1/admin/agents/finance-bot/approve-tags
+Content-Type: application/json
+
+{
+  "approved_tags": ["finance", "reporting"],
+  "reason": "Approved standard finance tags"
+}
+
+Response 200:
+{
+  "success": true,
+  "message": "Agent tags approved",
+  "agent_id": "finance-bot",
+  "approved_tags": ["finance", "reporting"]
+}
+```
+
+#### Approve Tags Per Skill/Reasoner
+```http
+POST /api/v1/admin/agents/finance-bot/approve-tags
+Content-Type: application/json
+
+{
+  "approved_tags": ["finance"],
+  "reasoner_tags": {
+    "payment-processor": ["finance", "pci-compliant"],
+    "report-generator": ["reporting"]
+  }
+}
+```
+
+#### Reject Agent Tags
+```http
+POST /api/v1/admin/agents/finance-bot/reject-tags
+Content-Type: application/json
+
+{
+  "reason": "Tags not appropriate for this deployment"
+}
+
+Response 200:
+{
+  "success": true,
+  "message": "Agent tags rejected",
+  "agent_id": "finance-bot"
+}
+```
+
 ### DID Resolution (did:web)
 
 ```http
@@ -531,9 +628,11 @@ Response 404 (revoked):
 |------|--------|---------|
 | **Protected agent rules** | Config file (primary) | Defines which agents require permission |
 | **Protected agent rules** | Database (secondary) | Rules added via Admin UI |
+| **Tag approval rules** | Config file | Controls which tags need manual approval |
 | **Permission approvals** | Database | Tracks caller→target approval status |
 | **DID documents** | Database | Stores did:web documents for resolution |
-| **Agent tags** | Agent registration | Self-declared identity (informational) |
+| **Agent proposed_tags** | Agent registration | Tags the developer requests |
+| **Agent approved_tags** | Admin approval / auto | Tags granted after evaluation |
 | **Agent dependencies** | Agent registration | Tags the agent intends to call |
 
 ### Full Configuration Example
@@ -570,6 +669,18 @@ permissions:
     - pattern_type: agent_id
       pattern: "payment-gateway"
       description: "Payment gateway requires permission"
+
+  # Tag approval rules (controls which tags require admin review)
+  tag_approval_rules:
+    # Default mode for tags not matching any rule: auto | manual | forbidden
+    default_mode: auto  # "auto" = zero-disruption default
+    rules:
+      - tags: ["admin", "superuser"]
+        approval: manual
+        reason: "Admin-level tags require review"
+      - tags: ["dangerous", "root"]
+        approval: forbidden
+        reason: "These tags are not allowed"
 ```
 
 ### Environment Variables
