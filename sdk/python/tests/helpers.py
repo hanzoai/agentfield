@@ -30,6 +30,7 @@ class DummyAgentFieldClient:
         vc_metadata=None,
         version: str = "1.0.0",
         agent_metadata=None,
+        tags=None,
     ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         self.register_calls.append(
             {
@@ -41,6 +42,7 @@ class DummyAgentFieldClient:
                 "vc_metadata": vc_metadata,
                 "version": version,
                 "agent_metadata": agent_metadata,
+                "tags": tags,
             }
         )
         return True, {"resolved_base_url": base_url}
@@ -106,6 +108,7 @@ class StubAgent:
     )
     reasoners: List[Dict[str, Any]] = field(default_factory=list)
     skills: List[Dict[str, Any]] = field(default_factory=list)
+    agent_tags: List[str] = field(default_factory=list)
     agentfield_connected: bool = True
     _current_status: AgentStatus = AgentStatus.STARTING
     callback_candidates: List[str] = field(default_factory=list)

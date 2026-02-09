@@ -75,41 +75,20 @@ export const navigationSections: NavigationSection[] = [
     ]
   },
   {
-    id: 'permissions',
-    title: 'Permissions',
+    id: 'authorization',
+    title: 'Authorization',
     items: [
-      {
-        id: 'pending-permissions',
-        label: 'Pending Approvals',
-        href: '/permissions/pending',
-        icon: 'hourglass',
-        description: 'Review and approve pending agent permission requests'
-      },
-      {
-        id: 'permission-history',
-        label: 'Permission History',
-        href: '/permissions/history',
-        icon: 'history',
-        description: 'Audit trail of all permission decisions'
-      },
-      {
-        id: 'protected-agents',
-        label: 'Protected Agents',
-        href: '/permissions/protected-agents',
-        icon: 'lock',
-        description: 'Configure which agents require permission to call'
-      },
       {
         id: 'tag-approval',
         label: 'Tag Approvals',
-        href: '/permissions/tag-approval',
+        href: '/authorization/tag-approval',
         icon: 'shield-check',
         description: 'Review and approve agent tag registrations'
       },
       {
         id: 'access-policies',
         label: 'Access Policies',
-        href: '/permissions/access-policies',
+        href: '/authorization/access-policies',
         icon: 'settings',
         description: 'Manage tag-based access policies for cross-agent calls'
       }

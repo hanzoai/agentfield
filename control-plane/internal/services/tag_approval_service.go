@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -13,6 +14,9 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 	"github.com/google/uuid"
 )
+
+// ErrNotPendingApproval indicates the agent is not in pending_approval status.
+var ErrNotPendingApproval = errors.New("agent is not pending approval")
 
 // TagApprovalResult holds the outcome of evaluating proposed tags against approval rules.
 type TagApprovalResult struct {
@@ -29,6 +33,7 @@ type TagApprovalStorage interface {
 	ListAgentsByLifecycleStatus(ctx context.Context, status types.AgentLifecycleStatus) ([]*types.AgentNode, error)
 	GetAgentDID(ctx context.Context, agentID string) (*types.AgentDIDInfo, error)
 	StoreAgentTagVC(ctx context.Context, agentID, agentDID, vcID, vcDocument, signature string, issuedAt time.Time, expiresAt *time.Time) error
+	RevokeAgentTagVC(ctx context.Context, agentID string) error
 }
 
 // TagApprovalVCService defines the VC signing operations needed by the tag approval service.
@@ -119,7 +124,8 @@ func (s *TagApprovalService) getTagApprovalMode(tag string) string {
 	return s.config.DefaultMode
 }
 
-// CollectAllProposedTags extracts all proposed tags from an agent's reasoners and skills.
+// CollectAllProposedTags extracts all proposed tags from an agent's reasoners, skills,
+// and agent-level ProposedTags field.
 func CollectAllProposedTags(agent *types.AgentNode) []string {
 	seen := make(map[string]struct{})
 	var tags []string
@@ -134,6 +140,11 @@ func CollectAllProposedTags(agent *types.AgentNode) []string {
 		}
 		seen[normalized] = struct{}{}
 		tags = append(tags, normalized)
+	}
+
+	// Collect agent-level proposed tags (sent by SDKs as top-level proposed_tags).
+	for _, t := range agent.ProposedTags {
+		add(t)
 	}
 
 	for _, r := range agent.Reasoners {
@@ -168,7 +179,7 @@ func (s *TagApprovalService) ApproveAgentTags(ctx context.Context, agentID strin
 	}
 
 	if agent.LifecycleStatus != types.AgentStatusPendingApproval {
-		return fmt.Errorf("agent %s is not pending approval (current status: %s)", agentID, agent.LifecycleStatus)
+		return fmt.Errorf("%w: agent %s (current status: %s)", ErrNotPendingApproval, agentID, agent.LifecycleStatus)
 	}
 
 	agent.ApprovedTags = approvedTags
@@ -232,7 +243,7 @@ func (s *TagApprovalService) ApproveAgentTagsPerSkill(ctx context.Context, agent
 	}
 
 	if agent.LifecycleStatus != types.AgentStatusPendingApproval {
-		return fmt.Errorf("agent %s is not pending approval (current status: %s)", agentID, agent.LifecycleStatus)
+		return fmt.Errorf("%w: agent %s (current status: %s)", ErrNotPendingApproval, agentID, agent.LifecycleStatus)
 	}
 
 	for i := range agent.Reasoners {
@@ -295,7 +306,7 @@ func (s *TagApprovalService) RejectAgentTags(ctx context.Context, agentID string
 	}
 
 	if agent.LifecycleStatus != types.AgentStatusPendingApproval {
-		return fmt.Errorf("agent %s is not pending approval (current status: %s)", agentID, agent.LifecycleStatus)
+		return fmt.Errorf("%w: agent %s (current status: %s)", ErrNotPendingApproval, agentID, agent.LifecycleStatus)
 	}
 
 	agent.LifecycleStatus = types.AgentStatusOffline
@@ -318,6 +329,42 @@ func (s *TagApprovalService) RejectAgentTags(ctx context.Context, agentID string
 		Str("rejected_by", rejectedBy).
 		Str("reason", reason).
 		Msg("Agent tags rejected")
+
+	return nil
+}
+
+// RevokeAgentTags revokes an agent's approved tags, transitions it back to
+// pending_approval, and revokes its tag VC. Works on agents in any lifecycle status.
+func (s *TagApprovalService) RevokeAgentTags(ctx context.Context, agentID string, revokedBy string, reason string) error {
+	agent, err := s.storage.GetAgent(ctx, agentID)
+	if err != nil {
+		return err
+	}
+
+	// Revoke the agent tag VC (non-fatal if no VC exists)
+	if err := s.storage.RevokeAgentTagVC(ctx, agentID); err != nil {
+		logger.Logger.Warn().Err(err).Str("agent_id", agentID).Msg("Failed to revoke agent tag VC (may not exist)")
+	}
+
+	// Clear approved tags
+	agent.ApprovedTags = nil
+	for i := range agent.Reasoners {
+		agent.Reasoners[i].ApprovedTags = nil
+	}
+	for i := range agent.Skills {
+		agent.Skills[i].ApprovedTags = nil
+	}
+	agent.LifecycleStatus = types.AgentStatusPendingApproval
+
+	if err := s.storage.RegisterAgent(ctx, agent); err != nil {
+		return err
+	}
+
+	logger.Logger.Info().
+		Str("agent_id", agentID).
+		Str("revoked_by", revokedBy).
+		Str("reason", reason).
+		Msg("Agent tags revoked")
 
 	return nil
 }
@@ -357,6 +404,12 @@ func (s *TagApprovalService) ProcessRegistrationTags(agent *types.AgentNode) Tag
 	}
 
 	return result
+}
+
+// IssueAutoApprovedTagsVC issues a Tag VC for auto-approved agents during registration.
+// This must be called AFTER the agent is stored and DID is registered.
+func (s *TagApprovalService) IssueAutoApprovedTagsVC(ctx context.Context, agentID string, approvedTags []string) {
+	s.issueTagVC(ctx, agentID, approvedTags, "system:auto-approved")
 }
 
 // issueTagVC creates and stores a signed Agent Tag VC for an agent.

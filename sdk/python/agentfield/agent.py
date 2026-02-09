@@ -527,6 +527,7 @@ class Agent(FastAPI):
         self.client = AgentFieldClient(
             base_url=agentfield_server, async_config=self.async_config, api_key=api_key
         )
+        self.client.caller_agent_id = self.node_id
         self._current_execution_context: Optional[ExecutionContext] = None
 
         # Initialize async execution manager (will be lazily created when needed)
@@ -1365,11 +1366,10 @@ class Agent(FastAPI):
                     error_message=error_message,
                     duration_ms=duration_ms,
                 )
-                if vc and self.dev_mode:
-                    log_debug(f"Generated VC {vc.vc_id} for {function_name}")
+                if vc:
+                    log_info(f"Generated VC {vc.vc_id} for {function_name}")
         except Exception as e:
-            if self.dev_mode:
-                log_error(f"Failed to generate VC for {function_name}: {e}")
+            log_warn(f"Failed to generate VC for {function_name}: {e}")
 
     def _build_callback_discovery_payload(self) -> Optional[Dict[str, Any]]:
         """Prepare discovery metadata for agent registration."""

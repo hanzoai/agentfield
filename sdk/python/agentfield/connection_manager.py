@@ -143,6 +143,7 @@ class ConnectionManager:
                     vc_metadata=self.agent._build_vc_metadata(),
                     version=self.agent.version,
                     agent_metadata=self.agent._build_agent_metadata(),
+                    tags=self.agent.agent_tags,
                 )
             finally:
                 # Restore original logging levels
@@ -152,6 +153,17 @@ class ConnectionManager:
             if success:
                 if payload:
                     self.agent._apply_discovery_response(payload)
+
+                # Check for pending_approval status (tag approval required)
+                if payload and payload.get("status") == "pending_approval":
+                    pending_tags = payload.get("pending_tags", [])
+                    log_info(
+                        f"Node '{self.agent.node_id}' registered but awaiting tag approval "
+                        f"(pending tags: {pending_tags})"
+                    )
+                    await self.agent.agentfield_handler._wait_for_approval()
+                    log_info(f"Node '{self.agent.node_id}' tag approval granted")
+
                 if self.agent.did_manager and not self.agent.did_enabled:
                     self.agent._register_agent_with_did()
                 self.state = ConnectionState.CONNECTED

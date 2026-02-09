@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
@@ -76,6 +77,13 @@ func (h *TagApprovalHandlers) ApproveAgentTags(c *gin.Context) {
 	// If per-skill/per-reasoner tags are provided, use per-skill approval
 	if len(req.SkillTags) > 0 || len(req.ReasonerTags) > 0 {
 		if err := h.tagApprovalService.ApproveAgentTagsPerSkill(c.Request.Context(), agentID, req.SkillTags, req.ReasonerTags, "admin"); err != nil {
+			if errors.Is(err, services.ErrNotPendingApproval) {
+				c.JSON(http.StatusConflict, gin.H{
+					"error":   "not_pending_approval",
+					"message": err.Error(),
+				})
+				return
+			}
 			logger.Logger.Error().Err(err).Str("agent_id", agentID).Msg("Failed to approve agent tags (per-skill)")
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error":   "approval_failed",
@@ -85,6 +93,13 @@ func (h *TagApprovalHandlers) ApproveAgentTags(c *gin.Context) {
 		}
 	} else {
 		if err := h.tagApprovalService.ApproveAgentTags(c.Request.Context(), agentID, req.ApprovedTags, "admin"); err != nil {
+			if errors.Is(err, services.ErrNotPendingApproval) {
+				c.JSON(http.StatusConflict, gin.H{
+					"error":   "not_pending_approval",
+					"message": err.Error(),
+				})
+				return
+			}
 			logger.Logger.Error().Err(err).Str("agent_id", agentID).Msg("Failed to approve agent tags")
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error":   "approval_failed",
@@ -121,6 +136,13 @@ func (h *TagApprovalHandlers) RejectAgentTags(c *gin.Context) {
 	}
 
 	if err := h.tagApprovalService.RejectAgentTags(c.Request.Context(), agentID, "admin", req.Reason); err != nil {
+		if errors.Is(err, services.ErrNotPendingApproval) {
+			c.JSON(http.StatusConflict, gin.H{
+				"error":   "not_pending_approval",
+				"message": err.Error(),
+			})
+			return
+		}
 		logger.Logger.Error().Err(err).Str("agent_id", agentID).Msg("Failed to reject agent tags")
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "rejection_failed",
@@ -136,6 +158,39 @@ func (h *TagApprovalHandlers) RejectAgentTags(c *gin.Context) {
 	})
 }
 
+// RevokeAgentTags revokes an agent's approved tags, transitioning it back to pending_approval.
+// POST /api/v1/admin/agents/:agent_id/revoke-tags
+func (h *TagApprovalHandlers) RevokeAgentTags(c *gin.Context) {
+	agentID := c.Param("agent_id")
+	if agentID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "missing_agent_id",
+			"message": "agent_id is required",
+		})
+		return
+	}
+
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	_ = c.ShouldBindJSON(&req) // reason is optional
+
+	if err := h.tagApprovalService.RevokeAgentTags(c.Request.Context(), agentID, "admin", req.Reason); err != nil {
+		logger.Logger.Error().Err(err).Str("agent_id", agentID).Msg("Failed to revoke agent tags")
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "revocation_failed",
+			"message": "Failed to revoke agent tags: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":  true,
+		"message":  "Agent tags revoked",
+		"agent_id": agentID,
+	})
+}
+
 // RegisterRoutes registers the tag approval admin routes.
 func (h *TagApprovalHandlers) RegisterRoutes(router *gin.RouterGroup) {
 	adminGroup := router.Group("/admin")
@@ -145,6 +200,7 @@ func (h *TagApprovalHandlers) RegisterRoutes(router *gin.RouterGroup) {
 			agentsGroup.GET("/pending", h.ListPendingAgents)
 			agentsGroup.POST("/:agent_id/approve-tags", h.ApproveAgentTags)
 			agentsGroup.POST("/:agent_id/reject-tags", h.RejectAgentTags)
+			agentsGroup.POST("/:agent_id/revoke-tags", h.RevokeAgentTags)
 		}
 	}
 }

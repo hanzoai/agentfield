@@ -131,6 +131,7 @@ class AgentFieldHandler:
                 vc_metadata=self.agent._build_vc_metadata(),
                 version=self.agent.version,
                 agent_metadata=self.agent._build_agent_metadata(),
+                tags=self.agent.agent_tags,
             )
             if success:
                 if payload:
@@ -484,6 +485,7 @@ class AgentFieldHandler:
                 vc_metadata=self.agent._build_vc_metadata(),
                 version=self.agent.version,
                 agent_metadata=self.agent._build_agent_metadata(),
+                tags=self.agent.agent_tags,
             )
 
             if success:

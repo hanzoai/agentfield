@@ -111,6 +111,8 @@ class AgentFieldClient:
         self._result_cache = ResultCache(self.async_config)
         self._latest_event_stream_headers: Dict[str, str] = {}
         self._current_workflow_context = None
+        # Caller agent ID for cross-agent call identification (set by Agent after init)
+        self.caller_agent_id: Optional[str] = None
 
         # Initialize shared sync session if not already created
         if AgentFieldClient._shared_sync_session is None:
@@ -569,6 +571,7 @@ class AgentFieldClient:
         vc_metadata: Optional[Dict[str, Any]] = None,
         version: str = "1.0.0",
         agent_metadata: Optional[Dict[str, Any]] = None,
+        tags: Optional[List[str]] = None,
     ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """Register or update agent information with AgentField server."""
         try:
@@ -576,6 +579,7 @@ class AgentFieldClient:
             if agent_metadata:
                 custom_metadata.update(agent_metadata)
 
+            agent_tags = tags or []
             registration_data = {
                 "id": node_id,
                 "team_id": "default",
@@ -583,6 +587,7 @@ class AgentFieldClient:
                 "version": version,
                 "reasoners": reasoners,
                 "skills": skills,
+                "proposed_tags": agent_tags,
                 "communication_config": {
                     "protocols": ["http"],
                     "websocket_endpoint": "",
@@ -713,6 +718,10 @@ class AgentFieldClient:
         actor_id = final_headers.pop("x-actor-id", None)
         if actor_id:
             final_headers["X-Actor-ID"] = actor_id
+
+        # Include caller agent ID for permission middleware identification
+        if self.caller_agent_id and "X-Caller-Agent-ID" not in final_headers:
+            final_headers["X-Caller-Agent-ID"] = self.caller_agent_id
 
         sanitized_headers = self._sanitize_header_values(final_headers)
         self._maybe_update_event_stream_headers(sanitized_headers)
@@ -1111,6 +1120,7 @@ class AgentFieldClient:
         vc_metadata: Optional[Dict[str, Any]] = None,
         version: str = "1.0.0",
         agent_metadata: Optional[Dict[str, Any]] = None,
+        tags: Optional[List[str]] = None,
     ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """Register agent with immediate status reporting for fast lifecycle."""
         try:
@@ -1118,6 +1128,7 @@ class AgentFieldClient:
             if agent_metadata:
                 custom_metadata.update(agent_metadata)
 
+            agent_tags = tags or []
             registration_data = {
                 "id": node_id,
                 "team_id": "default",
@@ -1125,6 +1136,7 @@ class AgentFieldClient:
                 "version": version,
                 "reasoners": reasoners,
                 "skills": skills,
+                "proposed_tags": agent_tags,
                 "lifecycle_status": status.value,
                 "communication_config": {
                     "protocols": ["http"],

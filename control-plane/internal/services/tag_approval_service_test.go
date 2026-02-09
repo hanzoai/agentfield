@@ -76,6 +76,11 @@ func (m *mockTagApprovalStorage) StoreAgentTagVC(_ context.Context, agentID, age
 	return nil
 }
 
+func (m *mockTagApprovalStorage) RevokeAgentTagVC(_ context.Context, agentID string) error {
+	delete(m.tagVCs, agentID)
+	return nil
+}
+
 func testApprovalConfig(rules ...config.TagApprovalRule) config.TagApprovalRulesConfig {
 	return config.TagApprovalRulesConfig{
 		DefaultMode: "manual",

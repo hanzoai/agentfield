@@ -5,7 +5,10 @@ import {
   CheckCircle,
   XCircle,
   Renew,
+  Trash,
+  Plus,
 } from "@/components/ui/icon-bridge";
+import { CompactTable } from "@/components/ui/CompactTable";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -19,6 +22,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import * as policiesApi from "../services/accessPoliciesApi";
 import type { AccessPolicy, AccessPolicyRequest } from "../services/accessPoliciesApi";
+import { AdminTokenPrompt } from "../components/AdminTokenPrompt";
+
+const GRID_TEMPLATE = "minmax(140px,1.5fr) minmax(120px,1.2fr) minmax(120px,1.2fr) 80px 70px 100px";
 
 const emptyPolicy: AccessPolicyRequest = {
   name: "",
@@ -36,6 +42,10 @@ export function AccessPoliciesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+
+  // Sort state
+  const [sortBy, setSortBy] = useState("priority");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
   // Create/edit dialog
   const [editPolicy, setEditPolicy] = useState<AccessPolicyRequest | null>(null);
@@ -68,6 +78,14 @@ export function AccessPoliciesPage() {
   useEffect(() => {
     fetchPolicies();
   }, [fetchPolicies]);
+
+  // Auto-dismiss success message
+  useEffect(() => {
+    if (success) {
+      const timer = setTimeout(() => setSuccess(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [success]);
 
   const openCreate = () => {
     setEditPolicy({ ...emptyPolicy });
@@ -144,26 +162,142 @@ export function AccessPoliciesPage() {
     }
   };
 
+  const handleSortChange = (field: string) => {
+    if (sortBy === field) {
+      setSortOrder(sortOrder === "asc" ? "desc" : "asc");
+    } else {
+      setSortBy(field);
+      setSortOrder("desc");
+    }
+  };
+
+  const columns = [
+    {
+      key: "name",
+      header: "Name",
+      sortable: true,
+      align: "left" as const,
+      render: (item: AccessPolicy) => (
+        <div className="min-w-0">
+          <div className="font-medium text-sm truncate">{item.name}</div>
+          {item.description && (
+            <div className="text-xs text-muted-foreground truncate">{item.description}</div>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: "caller_tags",
+      header: "Caller Tags",
+      sortable: false,
+      align: "left" as const,
+      render: (item: AccessPolicy) => (
+        <div className="flex flex-wrap gap-1 overflow-hidden">
+          {item.caller_tags.map((t) => (
+            <Badge key={t} variant="secondary" className="text-xs">{t}</Badge>
+          ))}
+        </div>
+      ),
+    },
+    {
+      key: "target_tags",
+      header: "Target Tags",
+      sortable: false,
+      align: "left" as const,
+      render: (item: AccessPolicy) => (
+        <div className="flex flex-wrap gap-1 overflow-hidden">
+          {item.target_tags.map((t) => (
+            <Badge key={t} variant="outline" className="text-xs">{t}</Badge>
+          ))}
+        </div>
+      ),
+    },
+    {
+      key: "action",
+      header: "Action",
+      sortable: false,
+      align: "center" as const,
+      render: (item: AccessPolicy) => (
+        <Badge variant={item.action === "allow" ? "default" : "destructive"}>
+          {item.action}
+        </Badge>
+      ),
+    },
+    {
+      key: "priority",
+      header: "Priority",
+      sortable: true,
+      align: "center" as const,
+      render: (item: AccessPolicy) => (
+        <span className="text-sm text-muted-foreground">{item.priority}</span>
+      ),
+    },
+    {
+      key: "actions",
+      header: "",
+      sortable: false,
+      align: "right" as const,
+      render: (item: AccessPolicy) => (
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 text-xs"
+            onClick={(e: React.MouseEvent) => {
+              e.stopPropagation();
+              openEdit(item);
+            }}
+          >
+            Edit
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 text-red-600 hover:text-red-700 hover:bg-red-500/10"
+            onClick={(e: React.MouseEvent) => {
+              e.stopPropagation();
+              setDeleteId(item.id);
+            }}
+          >
+            <Trash className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      ),
+    },
+  ];
+
   return (
-    <div className="space-y-6">
+    <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-hidden">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight">Access Policies</h2>
-          <p className="text-muted-foreground">
+          <h1 className="text-2xl font-semibold">Access Policies</h1>
+          <p className="text-muted-foreground text-sm mt-1">
             Manage tag-based access policies for cross-agent calls
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={fetchPolicies} disabled={loading}>
-            <Renew className="mr-2 h-4 w-4" />
+            <Renew className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
             Refresh
           </Button>
           <Button size="sm" onClick={openCreate}>
+            <Plus className="h-4 w-4 mr-2" />
             Create Policy
           </Button>
         </div>
       </div>
 
+      {/* Success message */}
+      {success && (
+        <Alert className="bg-green-500/10 border-green-500/30">
+          <CheckCircle className="h-4 w-4 text-green-600" />
+          <AlertTitle className="text-green-600">Success</AlertTitle>
+          <AlertDescription className="text-green-600">{success}</AlertDescription>
+        </Alert>
+      )}
+
+      {/* Error message */}
       {error && (
         <Alert variant="destructive">
           <XCircle className="h-4 w-4" />
@@ -172,80 +306,35 @@ export function AccessPoliciesPage() {
         </Alert>
       )}
 
-      {success && (
-        <Alert>
-          <CheckCircle className="h-4 w-4" />
-          <AlertTitle>Success</AlertTitle>
-          <AlertDescription>{success}</AlertDescription>
-        </Alert>
+      {/* Admin token prompt when forbidden */}
+      {error && error.toLowerCase().includes("forbidden") && (
+        <AdminTokenPrompt onTokenSet={fetchPolicies} />
       )}
 
-      {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <Renew className="h-6 w-6 animate-spin text-muted-foreground" />
-        </div>
-      ) : policies.length === 0 ? (
-        <div className="text-center py-12 text-muted-foreground">
-          No access policies configured. Create one to enable tag-based authorization.
-        </div>
-      ) : (
-        <div className="rounded-md border">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b bg-muted/50">
-                <th className="h-10 px-4 text-left text-sm font-medium">Name</th>
-                <th className="h-10 px-4 text-left text-sm font-medium">Caller Tags</th>
-                <th className="h-10 px-4 text-left text-sm font-medium">Target Tags</th>
-                <th className="h-10 px-4 text-left text-sm font-medium">Action</th>
-                <th className="h-10 px-4 text-left text-sm font-medium">Priority</th>
-                <th className="h-10 px-4 text-right text-sm font-medium">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {policies.map((p) => (
-                <tr key={p.id} className="border-b">
-                  <td className="px-4 py-3">
-                    <div className="font-medium">{p.name}</div>
-                    {p.description && (
-                      <div className="text-xs text-muted-foreground">{p.description}</div>
-                    )}
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex flex-wrap gap-1">
-                      {p.caller_tags.map((t) => (
-                        <Badge key={t} variant="secondary">{t}</Badge>
-                      ))}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex flex-wrap gap-1">
-                      {p.target_tags.map((t) => (
-                        <Badge key={t} variant="outline">{t}</Badge>
-                      ))}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <Badge variant={p.action === "allow" ? "default" : "destructive"}>
-                      {p.action}
-                    </Badge>
-                  </td>
-                  <td className="px-4 py-3 text-sm">{p.priority}</td>
-                  <td className="px-4 py-3 text-right">
-                    <div className="flex justify-end gap-2">
-                      <Button variant="outline" size="sm" onClick={() => openEdit(p)}>
-                        Edit
-                      </Button>
-                      <Button variant="destructive" size="sm" onClick={() => setDeleteId(p.id)}>
-                        Delete
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {/* Stats */}
+      <div className="text-sm text-muted-foreground">
+        {policies.length} polic{policies.length !== 1 ? "ies" : "y"} configured
+      </div>
+
+      {/* Table */}
+      <div className="flex-1 min-h-0">
+        <CompactTable
+          data={policies}
+          columns={columns}
+          loading={loading}
+          hasMore={false}
+          isFetchingMore={false}
+          sortBy={sortBy}
+          sortOrder={sortOrder}
+          onSortChange={handleSortChange}
+          gridTemplate={GRID_TEMPLATE}
+          getRowKey={(item) => String(item.id)}
+          emptyState={{
+            title: "No access policies",
+            description: "Create a policy to enable tag-based authorization for cross-agent calls.",
+          }}
+        />
+      </div>
 
       {/* Create/Edit Dialog */}
       <Dialog open={editPolicy !== null} onOpenChange={(open) => !open && setEditPolicy(null)}>

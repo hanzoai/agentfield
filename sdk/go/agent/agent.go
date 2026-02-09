@@ -552,7 +552,8 @@ func (a *Agent) Initialize(ctx context.Context) error {
 		return errors.New("no reasoners registered")
 	}
 
-	if err := a.registerNode(ctx); err != nil {
+	wasPendingApproval, err := a.registerNode(ctx)
+	if err != nil {
 		return fmt.Errorf("register node: %w", err)
 	}
 
@@ -563,8 +564,13 @@ func (a *Agent) Initialize(ctx context.Context) error {
 		}
 	}
 
-	if err := a.markReady(ctx); err != nil {
-		a.logger.Printf("warn: initial status update failed: %v", err)
+	// Only mark ready if the agent was NOT in pending_approval.
+	// Agents that went through tag approval are already transitioned to starting/ready
+	// by the admin approval process — calling markReady here would override that.
+	if !wasPendingApproval {
+		if err := a.markReady(ctx); err != nil {
+			a.logger.Printf("warn: initial status update failed: %v", err)
+		}
 	}
 
 	a.startLeaseLoop()
@@ -609,7 +615,7 @@ func (a *Agent) Serve(ctx context.Context) error {
 	}
 }
 
-func (a *Agent) registerNode(ctx context.Context) error {
+func (a *Agent) registerNode(ctx context.Context) (wasPendingApproval bool, err error) {
 	now := time.Now().UTC()
 
 	reasoners := make([]types.ReasonerDefinition, 0, len(a.reasoners))
@@ -653,21 +659,21 @@ func (a *Agent) registerNode(ctx context.Context) error {
 
 	resp, err := a.client.RegisterNode(ctx, payload)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// Handle pending approval state: poll until approved
 	if resp != nil && resp.Status == "pending_approval" {
 		a.logger.Printf("node %s registered but awaiting tag approval (pending tags: %v)", a.cfg.NodeID, resp.PendingTags)
 		if err := a.waitForApproval(ctx); err != nil {
-			return fmt.Errorf("tag approval wait failed: %w", err)
+			return true, fmt.Errorf("tag approval wait failed: %w", err)
 		}
 		a.logger.Printf("node %s tag approval granted", a.cfg.NodeID)
-		return nil
+		return true, nil
 	}
 
 	a.logger.Printf("node %s registered with AgentField", a.cfg.NodeID)
-	return nil
+	return false, nil
 }
 
 func (a *Agent) waitForApproval(ctx context.Context) error {
@@ -887,6 +893,20 @@ func (a *Agent) localVerificationMiddleware(next http.Handler) http.Handler {
 			}
 		}
 
+		// Allow trusted control-plane requests to bypass DID verification.
+		// The control plane sends Authorization: Bearer <internal_token> when
+		// forwarding execution requests on behalf of callers.
+		internalToken := a.cfg.InternalToken
+		if internalToken == "" {
+			internalToken = a.cfg.Token
+		}
+		if internalToken != "" {
+			if r.Header.Get("Authorization") == "Bearer "+internalToken {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+
 		// Extract DID auth headers
 		callerDID := r.Header.Get("X-Caller-DID")
 		signature := r.Header.Get("X-DID-Signature")
@@ -1052,7 +1072,13 @@ func (a *Agent) handleExecute(w http.ResponseWriter, r *http.Request) {
 			if execErr.ErrorDetails != nil {
 				response["error_details"] = execErr.ErrorDetails
 			}
-			writeJSON(w, http.StatusInternalServerError, response)
+			// Propagate the upstream HTTP status code (e.g. 403 from permission
+			// middleware) so the control plane can forward it to the original caller.
+			statusCode := execErr.StatusCode
+			if statusCode < 400 {
+				statusCode = http.StatusInternalServerError
+			}
+			writeJSON(w, statusCode, response)
 			return
 		}
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
@@ -1375,6 +1401,9 @@ func (a *Agent) Call(ctx context.Context, target string, input map[string]any) (
 	if execCtx.AgentNodeDID != "" {
 		req.Header.Set("X-Agent-Node-DID", execCtx.AgentNodeDID)
 	}
+	// Include caller agent identity for permission middleware
+	req.Header.Set("X-Caller-Agent-ID", a.cfg.NodeID)
+
 	if a.cfg.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+a.cfg.Token)
 	}

@@ -21,9 +21,6 @@ import { WorkflowDeckGLTestPage } from "./pages/WorkflowDeckGLTestPage";
 import { DIDExplorerPage } from "./pages/DIDExplorerPage";
 import { CredentialsPage } from "./pages/CredentialsPage";
 import { ObservabilityWebhookSettingsPage } from "./pages/ObservabilityWebhookSettingsPage";
-import { PendingPermissionsPage } from "./pages/PendingPermissionsPage";
-import { PermissionHistoryPage } from "./pages/PermissionHistoryPage";
-import { ProtectedAgentsPage } from "./pages/ProtectedAgentsPage";
 import { TagApprovalPage } from "./pages/TagApprovalPage";
 import { AccessPoliciesPage } from "./pages/AccessPoliciesPage";
 import { AuthProvider } from "./contexts/AuthContext";
@@ -104,11 +101,8 @@ function AppContent() {
               <Route path="/identity/dids" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><DIDExplorerPage /></div>} />
               <Route path="/identity/credentials" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><CredentialsPage /></div>} />
               <Route path="/settings/observability-webhook" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><ObservabilityWebhookSettingsPage /></div>} />
-              <Route path="/permissions/pending" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><PendingPermissionsPage /></div>} />
-              <Route path="/permissions/history" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><PermissionHistoryPage /></div>} />
-              <Route path="/permissions/protected-agents" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><ProtectedAgentsPage /></div>} />
-              <Route path="/permissions/tag-approval" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><TagApprovalPage /></div>} />
-              <Route path="/permissions/access-policies" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><AccessPoliciesPage /></div>} />
+              <Route path="/authorization/tag-approval" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><TagApprovalPage /></div>} />
+              <Route path="/authorization/access-policies" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><AccessPoliciesPage /></div>} />
               <Route path="/test/deckgl" element={<div className="p-4 md:p-6 lg:p-8 min-h-full"><WorkflowDeckGLTestPage /></div>} />
             </Routes>
           </main>

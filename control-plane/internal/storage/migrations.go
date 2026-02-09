@@ -46,7 +46,6 @@ func (ls *LocalStorage) autoMigrateSchema(ctx context.Context) error {
 		&ObservabilityWebhookModel{},
 		&ObservabilityDeadLetterQueueModel{},
 		// VC Authorization models
-		&PermissionApprovalModel{},
 		&DIDDocumentModel{},
 		&ProtectedAgentConfigModel{},
 		&AccessPolicyModel{},

@@ -1153,6 +1153,58 @@ func TestVCService_DetermineWorkflowStatus_AllSucceeded(t *testing.T) {
 	require.Len(t, chain.ComponentVCs, 3)
 }
 
+func TestVCService_GenerateExecutionVC_EmptyCallerDID_FallsBackToAgentDID(t *testing.T) {
+	vcService, didService, _, _ := setupVCTestEnvironment(t)
+
+	// Register an agent
+	req := &types.DIDRegistrationRequest{
+		AgentNodeID: "agent-empty-caller",
+		Reasoners:   []types.ReasonerDefinition{{ID: "reasoner1"}},
+	}
+
+	regResp, err := didService.RegisterAgent(req)
+	require.NoError(t, err)
+	require.True(t, regResp.Success)
+
+	agentDID := regResp.IdentityPackage.AgentDID.DID
+
+	// Empty CallerDID — should fall back to AgentNodeDID
+	execCtx := &types.ExecutionContext{
+		ExecutionID:  "exec-empty-caller",
+		WorkflowID:   "workflow-1",
+		SessionID:    "session-1",
+		CallerDID:    "",
+		TargetDID:    "",
+		AgentNodeDID: agentDID,
+		Timestamp:    time.Now(),
+	}
+
+	vc, err := vcService.GenerateExecutionVC(execCtx, []byte(`{"input": "test"}`), []byte(`{"output": "result"}`), "succeeded", nil, 100)
+	require.NoError(t, err)
+	require.NotNil(t, vc, "VC should be generated using agent's own DID as fallback")
+	require.Equal(t, agentDID, vc.CallerDID)
+	require.Equal(t, agentDID, vc.IssuerDID)
+}
+
+func TestVCService_GenerateExecutionVC_BothDIDsEmpty_ReturnsNil(t *testing.T) {
+	vcService, _, _, _ := setupVCTestEnvironment(t)
+
+	// Both CallerDID and AgentNodeDID are empty — should return nil gracefully
+	execCtx := &types.ExecutionContext{
+		ExecutionID:  "exec-no-did",
+		WorkflowID:   "workflow-1",
+		SessionID:    "session-1",
+		CallerDID:    "",
+		TargetDID:    "",
+		AgentNodeDID: "",
+		Timestamp:    time.Now(),
+	}
+
+	vc, err := vcService.GenerateExecutionVC(execCtx, []byte(`{"input": "test"}`), []byte(`{"output": "result"}`), "succeeded", nil, 100)
+	require.NoError(t, err)
+	require.Nil(t, vc, "VC generation should be skipped when no DID is available")
+}
+
 // Helper function
 func stringPtr(s string) *string {
 	return &s

@@ -65,7 +65,6 @@ type AgentFieldServer struct {
 	vcService         *services.VCService
 	didRegistry       *services.DIDRegistry
 	didWebService     *services.DIDWebService
-	permissionService   *services.PermissionService
 	accessPolicyService *services.AccessPolicyService
 	tagApprovalService  *services.TagApprovalService
 	tagVCVerifier       *services.TagVCVerifier
@@ -242,9 +241,8 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		fmt.Println("⚠️ DID and VC services are DISABLED in configuration")
 	}
 
-	// Initialize DIDWebService and PermissionService if DID is enabled
+	// Initialize DIDWebService if DID is enabled
 	var didWebService *services.DIDWebService
-	var permissionService *services.PermissionService
 
 	if cfg.Features.DID.Enabled && didService != nil {
 		// Determine domain for did:web identifiers
@@ -257,56 +255,12 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		fmt.Printf("🌐 Creating DID Web service with domain: %s\n", domain)
 		didWebService = services.NewDIDWebService(domain, didService, storageProvider)
 
-		// Create PermissionService if authorization is enabled
 		if cfg.Features.DID.Authorization.Enabled {
 			if cfg.Features.DID.Authorization.AdminToken == "" {
 				logger.Logger.Error().Msg("⚠️  SECURITY WARNING: Authorization is enabled but no admin_token is configured! Admin routes (tag approval, policy management) are unprotected. Set AGENTFIELD_AUTHORIZATION_ADMIN_TOKEN for production use.")
 			}
 			if cfg.Features.DID.Authorization.TagApprovalRules.DefaultMode == "" || cfg.Features.DID.Authorization.TagApprovalRules.DefaultMode == "auto" {
 				logger.Logger.Warn().Msg("⚠️  Tag approval default_mode is 'auto' — all agent tags will be auto-approved. Set tag_approval_rules.default_mode to 'manual' for production.")
-			}
-			fmt.Println("🔐 Creating Permission service...")
-			permissionConfig := &services.PermissionConfig{
-				Enabled:              true,
-				DefaultDurationHours: cfg.Features.DID.Authorization.DefaultApprovalDurationHours,
-				AutoRequestOnDeny:    cfg.Features.DID.Authorization.AutoRequestOnDeny,
-			}
-			permissionService = services.NewPermissionService(storageProvider, didWebService, vcService, permissionConfig)
-
-			// Initialize permission service (loads rules from storage)
-			if err := permissionService.Initialize(context.Background()); err != nil {
-				logger.Logger.Warn().Err(err).Msg("Failed to initialize permission service")
-			} else {
-				fmt.Println("✅ Permission service initialized successfully!")
-			}
-
-			// Seed protected agent rules from config file
-			if len(cfg.Features.DID.Authorization.ProtectedAgents) > 0 {
-				ctx := context.Background()
-				seededCount := 0
-				for _, rule := range cfg.Features.DID.Authorization.ProtectedAgents {
-					_, err := permissionService.AddProtectedAgentRule(ctx, &types.ProtectedAgentRuleRequest{
-						PatternType: types.ProtectedAgentPatternType(rule.PatternType),
-						Pattern:     rule.Pattern,
-						Description: rule.Description,
-					})
-					if err != nil {
-						// Log but don't fail - rule might already exist
-						logger.Logger.Debug().
-							Err(err).
-							Str("pattern_type", rule.PatternType).
-							Str("pattern", rule.Pattern).
-							Msg("Failed to seed protected agent rule from config (may already exist)")
-					} else {
-						seededCount++
-					}
-				}
-				if seededCount > 0 {
-					logger.Logger.Info().
-						Int("seeded_count", seededCount).
-						Int("total_config_rules", len(cfg.Features.DID.Authorization.ProtectedAgents)).
-						Msg("Seeded protected agent rules from config")
-				}
 			}
 		}
 	}
@@ -447,7 +401,6 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		vcService:              vcService,
 		didRegistry:            didRegistry,
 		didWebService:          didWebService,
-		permissionService:      permissionService,
 		accessPolicyService:    accessPolicyService,
 		tagApprovalService:     tagApprovalService,
 		tagVCVerifier:          tagVCVerifier,
@@ -734,7 +687,22 @@ func (s *AgentFieldServer) handleDIDWebAgentDocument(c *gin.Context) {
 }
 
 // serveDIDDocument resolves a DID and returns a W3C-compliant DID document.
+// It tries did:web resolution (database) first, then falls back to did:key (in-memory).
 func (s *AgentFieldServer) serveDIDDocument(c *gin.Context, did string) {
+	// Try did:web resolution via DIDWebService (stored in database)
+	if s.didWebService != nil && strings.HasPrefix(did, "did:web:") {
+		result, err := s.didWebService.ResolveDID(c.Request.Context(), did)
+		if err == nil && result.DIDDocument != nil {
+			c.JSON(http.StatusOK, result.DIDDocument)
+			return
+		}
+		if err == nil && result.DIDResolutionMetadata.Error == "deactivated" {
+			c.JSON(http.StatusGone, gin.H{"error": "DID has been revoked"})
+			return
+		}
+	}
+
+	// Fall back to did:key resolution via DIDService (in-memory registry)
 	identity, err := s.didService.ResolveDID(did)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "DID not found"})
@@ -1197,15 +1165,14 @@ func (s *AgentFieldServer) setupRoutes() {
 		// Reasoner and skill execution endpoints (legacy)
 		// When authorization is enabled, these require the same permission middleware
 		// as the unified execute endpoints to prevent policy bypass.
-		if s.config.Features.DID.Authorization.Enabled && s.permissionService != nil && s.didWebService != nil {
+		if s.config.Features.DID.Authorization.Enabled && s.accessPolicyService != nil && s.didWebService != nil {
 			legacyReasonerGroup := agentAPI.Group("/reasoners")
 			legacySkillGroup := agentAPI.Group("/skills")
 			permConfigLegacy := middleware.PermissionConfig{
-				Enabled:           true,
-				AutoRequestOnDeny: s.config.Features.DID.Authorization.AutoRequestOnDeny,
+				Enabled:       true,
+				DenyAnonymous: s.config.Features.DID.Authorization.DenyAnonymous,
 			}
 			legacyMiddleware := middleware.PermissionCheckMiddleware(
-				s.permissionService,
 				s.accessPolicyService,
 				s.tagVCVerifier,
 				s.storage,
@@ -1227,13 +1194,12 @@ func (s *AgentFieldServer) setupRoutes() {
 		executeGroup := agentAPI.Group("/execute")
 		{
 			// Apply permission middleware if authorization is enabled
-			if s.config.Features.DID.Authorization.Enabled && s.permissionService != nil && s.didWebService != nil {
+			if s.config.Features.DID.Authorization.Enabled && s.accessPolicyService != nil && s.didWebService != nil {
 				permConfig := middleware.PermissionConfig{
-					Enabled:           true,
-					AutoRequestOnDeny: s.config.Features.DID.Authorization.AutoRequestOnDeny,
+					Enabled:       true,
+					DenyAnonymous: s.config.Features.DID.Authorization.DenyAnonymous,
 				}
 				executeGroup.Use(middleware.PermissionCheckMiddleware(
-					s.permissionService,
 					s.accessPolicyService,
 					s.tagVCVerifier,
 					s.storage,
@@ -1291,6 +1257,9 @@ func (s *AgentFieldServer) setupRoutes() {
 			logger.Logger.Debug().Msg("Registering DID routes - all conditions met")
 			// Create DID handlers instance with services
 			didHandlers := handlers.NewDIDHandlers(s.didService, s.vcService)
+			if s.didWebService != nil {
+				didHandlers.SetDIDWebService(s.didWebService)
+			}
 
 			// Register service-backed DID routes
 			didHandlers.RegisterRoutes(agentAPI)
@@ -1479,32 +1448,24 @@ func (s *AgentFieldServer) setupRoutes() {
 			settings.DELETE("/observability-webhook/dlq", obsHandler.ClearDeadLetterQueueHandler)
 		}
 
-		// Permission API routes (VC-based authorization)
-		if s.permissionService != nil {
-			permissionHandlers := handlers.NewPermissionHandlers(s.permissionService, s.storage, s.didWebService)
-			permissionHandlers.RegisterRoutes(agentAPI)
-
-			// Admin permission management routes (protected by admin token if configured)
+		// Admin routes for tag approval and access policy management (VC-based authorization)
+		if s.config.Features.DID.Authorization.Enabled {
 			adminGroup := agentAPI.Group("")
 			adminGroup.Use(middleware.AdminTokenAuth(s.config.Features.DID.Authorization.AdminToken))
-			adminPermissionHandlers := admin.NewPermissionAdminHandlers(s.permissionService)
-			adminPermissionHandlers.RegisterRoutes(adminGroup)
-			// VC endpoint requires admin auth (contains sensitive approval metadata)
-			permissionHandlers.RegisterAdminRoutes(adminGroup)
 
-			// Tag approval admin routes (part of the same admin group)
+			// Tag approval admin routes
 			if s.tagApprovalService != nil {
 				tagApprovalHandlers := admin.NewTagApprovalHandlers(s.tagApprovalService)
 				tagApprovalHandlers.RegisterRoutes(adminGroup)
 			}
 
-			// Access policy admin routes (part of the same admin group)
+			// Access policy admin routes
 			if s.accessPolicyService != nil {
 				accessPolicyHandlers := admin.NewAccessPolicyHandlers(s.accessPolicyService)
 				accessPolicyHandlers.RegisterRoutes(adminGroup)
 			}
 
-			logger.Logger.Info().Msg("📋 Permission API routes registered")
+			logger.Logger.Info().Msg("📋 Authorization admin routes registered")
 		}
 	}
 

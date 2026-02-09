@@ -96,13 +96,9 @@ type AuthorizationConfig struct {
 	TimestampWindowSeconds int64 `yaml:"timestamp_window_seconds" mapstructure:"timestamp_window_seconds" default:"300"`
 	// DefaultApprovalDurationHours is the default duration for permission approvals
 	DefaultApprovalDurationHours int `yaml:"default_approval_duration_hours" mapstructure:"default_approval_duration_hours" default:"720"`
-	// AutoRequestOnDeny if true, automatically creates a permission request when access is denied
-	AutoRequestOnDeny bool `yaml:"auto_request_on_deny" mapstructure:"auto_request_on_deny" default:"true"`
-	// AdminToken is a separate token required for admin operations (approve/reject/revoke permissions,
-	// manage protected agent rules). If empty, admin routes fall back to the standard API key.
+	// AdminToken is a separate token required for admin operations (tag approval,
+	// policy management). If empty, admin routes fall back to the standard API key.
 	AdminToken string `yaml:"admin_token" mapstructure:"admin_token"`
-	// ProtectedAgents defines which agents require permission to call (seeded at startup)
-	ProtectedAgents []ProtectedAgentConfig `yaml:"protected_agents" mapstructure:"protected_agents"`
 	// InternalToken is sent as Authorization: Bearer header when the control plane
 	// forwards execution requests to agents. Agents with RequireOriginAuth enabled
 	// validate this token, preventing direct access to their HTTP ports.
@@ -110,18 +106,12 @@ type AuthorizationConfig struct {
 	// TagApprovalRules configures how proposed tags are handled at registration time.
 	// Default mode is "auto" (all tags auto-approved) for backward compatibility.
 	TagApprovalRules TagApprovalRulesConfig `yaml:"tag_approval_rules" mapstructure:"tag_approval_rules"`
+	// DenyAnonymous denies requests from callers with no agent identity (no DID,
+	// no X-Caller-Agent-ID, no X-Agent-Node-ID headers) when authorization is enabled.
+	// Default: false (backward compat — anonymous callers are allowed).
+	DenyAnonymous bool `yaml:"deny_anonymous" mapstructure:"deny_anonymous" default:"false"`
 	// AccessPolicies defines tag-based authorization policies for cross-agent calls.
 	AccessPolicies []AccessPolicyConfig `yaml:"access_policies" mapstructure:"access_policies"`
-}
-
-// ProtectedAgentConfig defines a rule for protecting agents.
-type ProtectedAgentConfig struct {
-	// PatternType is the type of pattern: "tag", "tag_pattern", or "agent_id"
-	PatternType string `yaml:"pattern_type" mapstructure:"pattern_type"`
-	// Pattern is the pattern to match against (supports wildcards for tag_pattern)
-	Pattern string `yaml:"pattern" mapstructure:"pattern"`
-	// Description is a human-readable description of why this agent is protected
-	Description string `yaml:"description" mapstructure:"description"`
 }
 
 // TagApprovalRulesConfig configures tag approval behavior at registration.

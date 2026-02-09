@@ -1,20 +1,19 @@
 /**
  * Permission Agent B (Protected Target) — TypeScript SDK
  *
- * A protected agent with tags ["sensitive", "analytics"]. The "sensitive"
- * tag matches the existing protection rule in agentfield.yaml:
+ * A protected agent with tags ["sensitive", "data-service"]. The "sensitive"
+ * tag triggers manual approval (tag_approval_rules in config), so this agent
+ * starts in "pending_approval" state until an admin approves its tags.
  *
- *   pattern_type: "tag"
- *   pattern: "sensitive"
- *   description: "Agents tagged sensitive require permission"
- *
- * This tests TAG-BASED protection (different from the Go SDK tests which
- * use agent_id pattern matching), and also generates Verifiable Credentials
- * on successful executions to test the VC + authorization integration.
+ * Once approved, access policies control which callers can invoke which reasoners:
+ *   - analytics callers can call analyze_data and get_schema (allowed by policy)
+ *   - analytics callers are denied delete_records (deny_functions in policy)
+ *   - constraint violations (e.g. limit > 1000) are rejected
  *
  * Reasoners:
- *   - analyze_data  — simulates data analysis, generates a VC on success
- *   - generate_report — simulates report generation, generates a VC on success
+ *   - analyze_data   — simulates data analysis, generates a VC on success
+ *   - delete_records — simulates record deletion (denied for analytics callers)
+ *   - get_schema     — returns the data schema
  */
 
 import { Agent } from '@agentfield/sdk';
@@ -27,23 +26,26 @@ async function main() {
     version: '1.0.0',
     devMode: true,
     didEnabled: true,
+    tags: ['sensitive', 'data-service'],
   });
 
   // Reasoner 1: analyze_data — simulates data analysis with VC generation.
   agent.reasoner('analyze_data', async (ctx) => {
     const startTime = Date.now();
     const query = ctx.input.query ?? 'no query provided';
+    const limit = ctx.input.limit ?? 100;
 
     const result = {
       status: 'analyzed',
       agent: 'ts-perm-target',
       query,
+      limit,
       insights: [
         { metric: 'total_records', value: 1542 },
         { metric: 'avg_processing_time_ms', value: 23.7 },
         { metric: 'error_rate', value: 0.003 },
       ],
-      message: `Analysis complete for query: ${query}`,
+      message: `Analysis complete for query: ${query} (limit=${limit})`,
       vcGenerated: false as boolean,
       vcId: undefined as string | undefined,
     };
@@ -66,50 +68,42 @@ async function main() {
 
     return result;
   }, {
-    description: 'Analyze data. Protected operation with VC generation.',
-    tags: ['sensitive', 'analytics'],
+    description: 'Analyze data. Protected by access policy — analytics callers allowed.',
+    tags: ['sensitive', 'data-service'],
   });
 
-  // Reasoner 2: generate_report — simulates report generation with VC.
-  agent.reasoner('generate_report', async (ctx) => {
-    const startTime = Date.now();
-    const reportType = ctx.input.type ?? 'summary';
+  // Reasoner 2: delete_records — denied for analytics callers by policy.
+  agent.reasoner('delete_records', async (ctx) => {
+    const table = ctx.input.table ?? 'records';
 
-    const result = {
-      status: 'generated',
+    return {
+      status: 'deleted',
       agent: 'ts-perm-target',
-      reportType,
-      report: {
-        title: `${reportType.charAt(0).toUpperCase() + reportType.slice(1)} Report`,
-        generatedAt: new Date().toISOString(),
-        sections: ['overview', 'metrics', 'recommendations'],
-        pageCount: 12,
-      },
-      message: `Report generated: ${reportType}`,
-      vcGenerated: false as boolean,
-      vcId: undefined as string | undefined,
+      table,
+      message: `Records deleted from ${table}`,
     };
-
-    // Generate a Verifiable Credential for this execution
-    try {
-      const credential = await ctx.did.generateCredential({
-        inputData: ctx.input,
-        outputData: { reportType: result.reportType, pageCount: result.report.pageCount },
-        status: 'succeeded',
-        durationMs: Date.now() - startTime,
-      });
-
-      result.vcGenerated = true;
-      result.vcId = credential.vcId;
-      console.log(`[VC] Generated credential for generate_report: ${credential.vcId}`);
-    } catch (error) {
-      console.error('[VC] Failed to generate credential:', error);
-    }
-
-    return result;
   }, {
-    description: 'Generate a report. Protected operation with VC generation.',
-    tags: ['sensitive', 'analytics', 'reporting'],
+    description: 'Delete records. Denied for analytics callers by policy.',
+    tags: ['data-service'],
+  });
+
+  // Reasoner 3: get_schema — returns the data schema.
+  agent.reasoner('get_schema', async (ctx) => {
+    return {
+      status: 'success',
+      agent: 'ts-perm-target',
+      schema: {
+        table: 'records',
+        columns: [
+          { name: 'id', type: 'integer', primary_key: true },
+          { name: 'name', type: 'text' },
+          { name: 'created_at', type: 'timestamp' },
+        ],
+      },
+    };
+  }, {
+    description: 'Get the data schema.',
+    tags: ['data-service'],
   });
 
   await agent.serve();
@@ -119,8 +113,8 @@ Permission Agent B (Protected) — TypeScript SDK
 Node: ts-perm-target
 Port: ${agent.config.port}
 Server: ${agent.config.agentFieldUrl}
-Tags: sensitive, analytics
-Reasoners: analyze_data, generate_report
+Tags: sensitive, data-service
+Reasoners: analyze_data, delete_records, get_schema
   `);
 }
 

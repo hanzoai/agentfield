@@ -403,3 +403,22 @@ func toFloat64(v any) (float64, bool) {
 		return 0, false
 	}
 }
+
+// matchesPattern checks if a value matches a pattern (supports wildcards).
+func matchesPattern(pattern, value string) bool {
+	if pattern == value {
+		return true
+	}
+	if pattern == "*" {
+		return true
+	}
+	if strings.HasSuffix(pattern, "*") {
+		prefix := strings.TrimSuffix(pattern, "*")
+		return strings.HasPrefix(value, prefix)
+	}
+	if strings.HasPrefix(pattern, "*") {
+		suffix := strings.TrimPrefix(pattern, "*")
+		return strings.HasSuffix(value, suffix)
+	}
+	return false
+}

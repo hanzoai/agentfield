@@ -128,6 +128,10 @@ func (m *mockTagStorage) StoreAgentTagVC(_ context.Context, _, _, _, _, _ string
 	return nil
 }
 
+func (m *mockTagStorage) RevokeAgentTagVC(_ context.Context, _ string) error {
+	return nil
+}
+
 // ============================================================================
 // Access Policy Handler Tests
 // ============================================================================
@@ -385,7 +389,7 @@ func TestTagApprovalHandlers_ApproveAgentTags_InvalidJSON(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-func TestTagApprovalHandlers_ApproveAgentTags_NonPendingFails(t *testing.T) {
+func TestTagApprovalHandlers_ApproveAgentTags_NonPendingReturns409(t *testing.T) {
 	storage := newMockTagStorage()
 	storage.agents["agent-1"] = &types.AgentNode{
 		ID:              "agent-1",
@@ -400,8 +404,27 @@ func TestTagApprovalHandlers_ApproveAgentTags_NonPendingFails(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusInternalServerError, w.Code)
-	assert.Contains(t, w.Body.String(), "approval_failed")
+	assert.Equal(t, http.StatusConflict, w.Code)
+	assert.Contains(t, w.Body.String(), "not_pending_approval")
+}
+
+func TestTagApprovalHandlers_RejectAgentTags_NonPendingReturns409(t *testing.T) {
+	storage := newMockTagStorage()
+	storage.agents["agent-1"] = &types.AgentNode{
+		ID:              "agent-1",
+		LifecycleStatus: types.AgentStatusReady,
+	}
+
+	router := setupTagApprovalRouter(storage)
+
+	body := `{"reason":"revoke access"}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/agents/agent-1/reject-tags", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusConflict, w.Code)
+	assert.Contains(t, w.Body.String(), "not_pending_approval")
 }
 
 func TestTagApprovalHandlers_ApproveAgentTags_PerSkill(t *testing.T) {
@@ -480,4 +503,58 @@ func TestTagApprovalHandlers_RejectAgentTags_NotFoundFails(t *testing.T) {
 
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 	assert.Contains(t, w.Body.String(), "rejection_failed")
+}
+
+func TestTagApprovalHandlers_RevokeAgentTags_ReadyAgent(t *testing.T) {
+	storage := newMockTagStorage()
+	storage.agents["agent-1"] = &types.AgentNode{
+		ID:              "agent-1",
+		LifecycleStatus: types.AgentStatusReady,
+		ApprovedTags:    []string{"finance", "billing"},
+	}
+
+	router := setupTagApprovalRouter(storage)
+
+	body := `{"reason":"security review"}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/agents/agent-1/revoke-tags", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "success")
+
+	// Verify agent was transitioned to pending_approval with cleared tags
+	agent := storage.agents["agent-1"]
+	assert.Equal(t, types.AgentStatusPendingApproval, agent.LifecycleStatus)
+	assert.Nil(t, agent.ApprovedTags)
+}
+
+func TestTagApprovalHandlers_RevokeAgentTags_EmptyBody(t *testing.T) {
+	storage := newMockTagStorage()
+	storage.agents["agent-1"] = &types.AgentNode{
+		ID:              "agent-1",
+		LifecycleStatus: types.AgentStatusReady,
+		ApprovedTags:    []string{"finance"},
+	}
+
+	router := setupTagApprovalRouter(storage)
+
+	// Revocation without reason should work
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/agents/agent-1/revoke-tags", nil)
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestTagApprovalHandlers_RevokeAgentTags_NotFoundFails(t *testing.T) {
+	router := setupTagApprovalRouter(newMockTagStorage())
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/agents/nonexistent/revoke-tags", nil)
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Contains(t, w.Body.String(), "revocation_failed")
 }

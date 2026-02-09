@@ -1,15 +1,21 @@
 """
 Permission Agent B (Protected Target)
 
-A protected agent that requires permission to call.
-Protected by the agent_id rule matching "permission-agent-b" in the config,
-and also tagged "sensitive" to test tag-based protection.
+A protected agent that demonstrates tag-based authorization with access policies.
+Tags: ["sensitive", "data-service", "payments"]
 
-Test flow:
-  1. Start control plane with authorization enabled
-  2. Start this agent
-  3. Try calling it from permission-agent-a -> should be denied
-  4. Approve permission via admin API -> should succeed
+The "sensitive" tag triggers manual approval (tag_approval_rules in config),
+so this agent starts in "pending_approval" state until an admin approves its tags.
+
+Once approved, access policies control which callers can invoke which reasoners:
+  - analytics callers can call query_data and get_schema (allowed by policy)
+  - analytics callers are denied delete_records (deny_functions in policy)
+  - constraint violations (e.g. limit > 1000) are rejected
+
+Reasoners:
+  - query_data(query, limit)  — simulates a data query (allowed for analytics)
+  - delete_records(table)     — simulates record deletion (denied for analytics)
+  - process_payment(amount, currency) — simulates payment processing
 """
 
 from agentfield import Agent
@@ -18,13 +24,39 @@ import os
 app = Agent(
     node_id="permission-agent-b",
     agentfield_server=os.getenv("AGENTFIELD_URL", "http://localhost:8080"),
-    tags=["sensitive", "payments"],
+    tags=["sensitive", "data-service", "payments"],
+    enable_did=True,
+    vc_enabled=True,
 )
 
 
-@app.skill()
+@app.skill(tags=["data-service", "sensitive"])
+def query_data(query: str = "SELECT *", limit: int = 100) -> dict:
+    """Execute a data query. Protected by access policy — analytics callers allowed."""
+    return {
+        "status": "success",
+        "agent": "permission-agent-b",
+        "query": query,
+        "limit": limit,
+        "results": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}],
+        "message": f"Query executed: {query} (limit={limit})",
+    }
+
+
+@app.skill(tags=["data-service"])
+def delete_records(table: str = "records") -> dict:
+    """Delete records from a table. Denied for analytics callers by policy."""
+    return {
+        "status": "deleted",
+        "agent": "permission-agent-b",
+        "table": table,
+        "message": f"Records deleted from {table}",
+    }
+
+
+@app.skill(tags=["payments", "financial"])
 def process_payment(amount: float, currency: str = "USD") -> dict:
-    """Process a payment. This is a protected operation."""
+    """Process a payment. Protected operation."""
     return {
         "status": "processed",
         "amount": amount,
@@ -34,18 +66,9 @@ def process_payment(amount: float, currency: str = "USD") -> dict:
     }
 
 
-@app.skill()
-def get_balance() -> dict:
-    """Check balance. Also protected since the whole agent is protected."""
-    return {
-        "balance": 10000.00,
-        "currency": "USD",
-        "agent": "permission-agent-b",
-    }
-
-
 if __name__ == "__main__":
-    print("🔒 Permission Agent B (Protected Target)")
-    print("📍 Node: permission-agent-b")
-    print("🏷️  Tags: sensitive, payments")
+    print("Permission Agent B (Protected Target)")
+    print("Node: permission-agent-b")
+    print("Tags: sensitive, data-service, payments")
+    print("Reasoners: query_data, delete_records, process_payment")
     app.run(auto_port=True)

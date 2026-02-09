@@ -365,35 +365,6 @@ func (s *stubStorage) GetDeadLetterQueue(ctx context.Context, limit, offset int)
 func (s *stubStorage) DeleteFromDeadLetterQueue(ctx context.Context, ids []int64) error { return nil }
 func (s *stubStorage) ClearDeadLetterQueue(ctx context.Context) error                   { return nil }
 
-// Permission approval operations
-func (s *stubStorage) CreatePermissionApproval(ctx context.Context, approval *types.PermissionApproval) error {
-	return nil
-}
-func (s *stubStorage) GetPermissionApproval(ctx context.Context, callerDID, targetDID string) (*types.PermissionApproval, error) {
-	return nil, nil
-}
-func (s *stubStorage) GetPermissionApprovalByID(ctx context.Context, id int64) (*types.PermissionApproval, error) {
-	return nil, nil
-}
-func (s *stubStorage) UpdatePermissionApproval(ctx context.Context, approval *types.PermissionApproval) error {
-	return nil
-}
-func (s *stubStorage) ListPermissionApprovals(ctx context.Context, status types.PermissionStatus) ([]*types.PermissionApproval, error) {
-	return nil, nil
-}
-func (s *stubStorage) ListAllPermissionApprovals(ctx context.Context) ([]*types.PermissionApproval, error) {
-	return nil, nil
-}
-
-// Protected agent rule operations
-func (s *stubStorage) GetProtectedAgentRules(ctx context.Context) ([]*types.ProtectedAgentRule, error) {
-	return nil, nil
-}
-func (s *stubStorage) CreateProtectedAgentRule(ctx context.Context, rule *types.ProtectedAgentRule) error {
-	return nil
-}
-func (s *stubStorage) DeleteProtectedAgentRule(ctx context.Context, id int64) error { return nil }
-
 // DID document operations
 func (s *stubStorage) StoreDIDDocument(ctx context.Context, record *types.DIDDocumentRecord) error {
 	return nil
@@ -437,6 +408,9 @@ func (s *stubStorage) GetAgentTagVC(ctx context.Context, agentID string) (*types
 	return nil, nil
 }
 func (s *stubStorage) RevokeAgentTagVC(ctx context.Context, agentID string) error { return nil }
+func (s *stubStorage) ListAgentTagVCs(ctx context.Context) ([]*types.AgentTagVCRecord, error) {
+	return nil, nil
+}
 
 // stubPayloadStore implements services.PayloadStore
 type stubPayloadStore struct{}

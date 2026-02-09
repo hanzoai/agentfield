@@ -503,9 +503,16 @@ func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *ser
 
 		// Handle lifecycle status for re-registrations vs new registrations
 		if isReRegistration {
-			// For re-registrations, preserve existing lifecycle status if the new one is empty
-			// This prevents status resets that cause oscillation
-			if newNode.LifecycleStatus == "" && existingNode.LifecycleStatus != "" {
+			// Detect admin revocation: pending_approval with nil/empty approved tags
+			// means an admin explicitly revoked this agent's tags. In that case,
+			// force the agent to stay in pending_approval until re-approved.
+			adminRevoked := existingNode.LifecycleStatus == types.AgentStatusPendingApproval &&
+				len(existingNode.ApprovedTags) == 0
+
+			if adminRevoked {
+				newNode.LifecycleStatus = types.AgentStatusPendingApproval
+			} else if newNode.LifecycleStatus == "" && existingNode.LifecycleStatus != "" {
+				// Preserve existing lifecycle status (e.g. ready) for seamless reconnection
 				newNode.LifecycleStatus = existingNode.LifecycleStatus
 			} else if newNode.LifecycleStatus == "" {
 				newNode.LifecycleStatus = types.AgentStatusStarting
@@ -608,6 +615,13 @@ func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *ser
 			} else {
 				logger.Logger.Debug().Msgf("✅ DID:web document ensured for node %s", newNode.ID)
 			}
+		}
+
+		// Issue Tag VC for auto-approved agents now that agent + DID are stored.
+		// This must happen AFTER RegisterAgent + DID registration so that
+		// issueTagVC can look up the agent's DID from storage.
+		if tagApprovalResult != nil && tagApprovalResult.AllAutoApproved && len(tagApprovalResult.AutoApproved) > 0 && tagApprovalService != nil {
+			tagApprovalService.IssueAutoApprovedTagsVC(ctx, newNode.ID, tagApprovalResult.AutoApproved)
 		}
 
 		// Note: Node registration events are now handled by the health monitor
@@ -797,8 +811,20 @@ func HeartbeatHandler(storageProvider storage.StorageProvider, uiService *servic
 				}
 
 				if validStatuses[enhancedHeartbeat.Status] {
-					status := types.AgentLifecycleStatus(enhancedHeartbeat.Status)
-					lifecycleStatus = &status
+					// Protect pending_approval: heartbeats cannot override admin-controlled state
+					if existingNode == nil {
+						var err error
+						existingNode, err = storageProvider.GetAgent(ctx, nodeID)
+						if err != nil {
+							logger.Logger.Error().Err(err).Msgf("❌ Failed to get node %s for pending_approval check", nodeID)
+						}
+					}
+					if existingNode != nil && existingNode.LifecycleStatus == types.AgentStatusPendingApproval {
+						logger.Logger.Debug().Msgf("⏸️ Ignoring heartbeat status update for node %s: agent is pending_approval (admin action required)", nodeID)
+					} else {
+						status := types.AgentLifecycleStatus(enhancedHeartbeat.Status)
+						lifecycleStatus = &status
+					}
 				}
 			}
 
@@ -883,7 +909,10 @@ func HeartbeatHandler(storageProvider storage.StorageProvider, uiService *servic
 						}
 					}
 
-					if existingNode.LifecycleStatus != newStatus {
+					// Protect pending_approval: heartbeats cannot override admin-controlled state
+					if existingNode.LifecycleStatus == types.AgentStatusPendingApproval {
+						logger.Logger.Debug().Msgf("⏸️ Ignoring legacy heartbeat status for node %s: agent is pending_approval", nodeID)
+					} else if existingNode.LifecycleStatus != newStatus {
 						if err := storageProvider.UpdateAgentLifecycleStatus(ctx, nodeID, newStatus); err != nil {
 							logger.Logger.Error().Err(err).Msgf("❌ Failed to update lifecycle status for node %s", nodeID)
 						} else {
@@ -946,14 +975,22 @@ func UpdateLifecycleStatusHandler(storageProvider storage.StorageProvider, uiSer
 		}
 
 		// Verify node exists
-		_, err := storageProvider.GetAgent(ctx, nodeID)
+		existingNode, err := storageProvider.GetAgent(ctx, nodeID)
 		if err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "node not found"})
 			return
 		}
 
-		// Prepare status update for unified system
+		// Protect pending_approval: only admin tag approval can transition out of this state
 		newLifecycleStatus := types.AgentLifecycleStatus(statusUpdate.LifecycleStatus)
+		if existingNode.LifecycleStatus == types.AgentStatusPendingApproval {
+			logger.Logger.Debug().Msgf("⏸️ Rejecting lifecycle status update for node %s: agent is pending_approval (admin action required)", nodeID)
+			c.JSON(http.StatusConflict, gin.H{
+				"error":   "agent_pending_approval",
+				"message": "Cannot update lifecycle status: agent is awaiting tag approval. Use admin approval endpoint instead.",
+			})
+			return
+		}
 
 		// Prepare MCP status if provided
 		var mcpStatus *types.MCPStatusInfo

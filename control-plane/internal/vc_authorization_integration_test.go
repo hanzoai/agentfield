@@ -13,15 +13,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
-	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/Agent-Field/agentfield/control-plane/internal/handlers"
-	adminhandlers "github.com/Agent-Field/agentfield/control-plane/internal/handlers/admin"
 	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
 	"github.com/Agent-Field/agentfield/control-plane/internal/services"
 	"github.com/Agent-Field/agentfield/control-plane/internal/storage"
@@ -37,13 +34,13 @@ import (
 
 // testContext holds all components needed for integration testing
 type testContext struct {
-	t                 *testing.T
-	ctx               context.Context
-	storage           *storage.LocalStorage
-	didWebService     *mockDIDWebService
-	permissionService *services.PermissionService
-	router            *gin.Engine
-	cleanup           func()
+	t                   *testing.T
+	ctx                 context.Context
+	storage             *storage.LocalStorage
+	didWebService       *mockDIDWebService
+	accessPolicyService *services.AccessPolicyService
+	router              *gin.Engine
+	cleanup             func()
 }
 
 // mockDIDWebService provides a minimal DID web service for testing
@@ -205,17 +202,10 @@ func setupTestContext(t *testing.T) *testContext {
 	// Create mock DID Web service (uses real storage)
 	didWebService := newMockDIDWebService("localhost:8080", ls)
 
-	// Create permission service
-	permissionConfig := &services.PermissionConfig{
-		Enabled:              true,
-		DefaultDurationHours: 720, // 30 days
-		AutoRequestOnDeny:    true,
-	}
-	permissionService := services.NewPermissionService(ls, nil, nil, permissionConfig)
-
-	// Initialize permission service (loads protected agent rules)
-	err := permissionService.Initialize(ctx)
-	require.NoError(t, err, "failed to initialize permission service")
+	// Create access policy service (replaces legacy permission service)
+	accessPolicyService := services.NewAccessPolicyService(ls)
+	err := accessPolicyService.Initialize(ctx)
+	require.NoError(t, err, "failed to initialize access policy service")
 
 	// Set up Gin router for HTTP tests
 	gin.SetMode(gin.TestMode)
@@ -232,12 +222,12 @@ func setupTestContext(t *testing.T) *testContext {
 	})
 
 	tc := &testContext{
-		t:                 t,
-		ctx:               ctx,
-		storage:           ls,
-		didWebService:     didWebService,
-		permissionService: permissionService,
-		router:            router,
+		t:                   t,
+		ctx:                 ctx,
+		storage:             ls,
+		didWebService:       didWebService,
+		accessPolicyService: accessPolicyService,
+		router:              router,
 		cleanup: func() {
 			_ = ls.Close(ctx)
 		},
@@ -397,209 +387,95 @@ func TestVCAuth_Phase1_Storage_DIDDocuments(t *testing.T) {
 	})
 }
 
-func TestVCAuth_Phase1_Storage_PermissionApprovals(t *testing.T) {
+func TestVCAuth_Phase1_Storage_AccessPolicies(t *testing.T) {
 	tc := setupTestContext(t)
 
-	t.Run("create and retrieve permission approval", func(t *testing.T) {
-		approval := &types.PermissionApproval{
-			CallerDID:     "did:web:localhost:agents:caller-1",
-			TargetDID:     "did:web:localhost:agents:target-1",
-			CallerAgentID: "caller-1",
-			TargetAgentID: "target-1",
-			Status:        types.PermissionStatusPending,
-			CreatedAt:     time.Now(),
-			UpdatedAt:     time.Now(),
+	t.Run("create and retrieve access policy", func(t *testing.T) {
+		now := time.Now()
+		policy := &types.AccessPolicy{
+			Name:           "test-policy",
+			CallerTags:     []string{"analytics"},
+			TargetTags:     []string{"data-service"},
+			AllowFunctions: []string{"query_*", "get_*"},
+			DenyFunctions:  []string{"delete_*"},
+			Constraints: map[string]types.AccessConstraint{
+				"limit": {Operator: "<=", Value: 1000},
+			},
+			Action:    "allow",
+			Priority:  100,
+			Enabled:   true,
+			CreatedAt: now,
+			UpdatedAt: now,
 		}
 
-		err := tc.storage.CreatePermissionApproval(tc.ctx, approval)
+		err := tc.storage.CreateAccessPolicy(tc.ctx, policy)
 		require.NoError(t, err)
-		assert.NotZero(t, approval.ID, "approval ID should be set after creation")
-
-		// Retrieve by caller/target DIDs
-		retrieved, err := tc.storage.GetPermissionApproval(tc.ctx, approval.CallerDID, approval.TargetDID)
-		require.NoError(t, err)
-		assert.Equal(t, approval.CallerDID, retrieved.CallerDID)
-		assert.Equal(t, approval.TargetDID, retrieved.TargetDID)
-		assert.Equal(t, types.PermissionStatusPending, retrieved.Status)
+		assert.NotZero(t, policy.ID, "policy ID should be set after creation")
 
 		// Retrieve by ID
-		retrievedByID, err := tc.storage.GetPermissionApprovalByID(tc.ctx, approval.ID)
+		retrieved, err := tc.storage.GetAccessPolicyByID(tc.ctx, policy.ID)
 		require.NoError(t, err)
-		assert.Equal(t, approval.ID, retrievedByID.ID)
+		assert.Equal(t, "test-policy", retrieved.Name)
+		assert.Equal(t, "allow", retrieved.Action)
+		assert.Equal(t, 100, retrieved.Priority)
+		assert.True(t, retrieved.Enabled)
 	})
 
-	t.Run("update permission approval - approve", func(t *testing.T) {
-		approval := &types.PermissionApproval{
-			CallerDID:     "did:web:localhost:agents:caller-2",
-			TargetDID:     "did:web:localhost:agents:target-2",
-			CallerAgentID: "caller-2",
-			TargetAgentID: "target-2",
-			Status:        types.PermissionStatusPending,
-			CreatedAt:     time.Now(),
-			UpdatedAt:     time.Now(),
-		}
-
-		err := tc.storage.CreatePermissionApproval(tc.ctx, approval)
+	t.Run("list access policies", func(t *testing.T) {
+		policies, err := tc.storage.GetAccessPolicies(tc.ctx)
 		require.NoError(t, err)
+		assert.GreaterOrEqual(t, len(policies), 1)
+	})
 
-		// Update to approved
+	t.Run("update access policy", func(t *testing.T) {
 		now := time.Now()
-		approvedBy := "admin"
-		approval.Status = types.PermissionStatusApproved
-		approval.ApprovedBy = &approvedBy
-		approval.ApprovedAt = &now
-		approval.UpdatedAt = now
+		policy := &types.AccessPolicy{
+			Name:       "to-update",
+			CallerTags: []string{"caller"},
+			TargetTags: []string{"target"},
+			Action:     "deny",
+			Priority:   50,
+			Enabled:    true,
+			CreatedAt:  now,
+			UpdatedAt:  now,
+		}
 
-		err = tc.storage.UpdatePermissionApproval(tc.ctx, approval)
+		err := tc.storage.CreateAccessPolicy(tc.ctx, policy)
 		require.NoError(t, err)
 
-		// Verify update
-		retrieved, err := tc.storage.GetPermissionApprovalByID(tc.ctx, approval.ID)
+		policy.Action = "allow"
+		policy.Priority = 200
+		policy.UpdatedAt = time.Now()
+		err = tc.storage.UpdateAccessPolicy(tc.ctx, policy)
 		require.NoError(t, err)
-		assert.Equal(t, types.PermissionStatusApproved, retrieved.Status)
-		assert.NotNil(t, retrieved.ApprovedBy)
-		assert.Equal(t, "admin", *retrieved.ApprovedBy)
+
+		retrieved, err := tc.storage.GetAccessPolicyByID(tc.ctx, policy.ID)
+		require.NoError(t, err)
+		assert.Equal(t, "allow", retrieved.Action)
+		assert.Equal(t, 200, retrieved.Priority)
 	})
 
-	t.Run("list permission approvals by status", func(t *testing.T) {
-		// Create pending approval
-		pending := &types.PermissionApproval{
-			CallerDID:     "did:web:localhost:agents:caller-3",
-			TargetDID:     "did:web:localhost:agents:target-3",
-			CallerAgentID: "caller-3",
-			TargetAgentID: "target-3",
-			Status:        types.PermissionStatusPending,
-			CreatedAt:     time.Now(),
-			UpdatedAt:     time.Now(),
-		}
-		err := tc.storage.CreatePermissionApproval(tc.ctx, pending)
-		require.NoError(t, err)
-
-		// List pending
-		pendingList, err := tc.storage.ListPermissionApprovals(tc.ctx, types.PermissionStatusPending)
-		require.NoError(t, err)
-		assert.GreaterOrEqual(t, len(pendingList), 1)
-
-		// Verify our approval is in the list
-		found := false
-		for _, p := range pendingList {
-			if p.ID == pending.ID {
-				found = true
-				break
-			}
-		}
-		assert.True(t, found, "expected pending approval in list")
-	})
-
-	t.Run("unique constraint on caller-target pair", func(t *testing.T) {
-		approval1 := &types.PermissionApproval{
-			CallerDID:     "did:web:localhost:agents:unique-caller",
-			TargetDID:     "did:web:localhost:agents:unique-target",
-			CallerAgentID: "unique-caller",
-			TargetAgentID: "unique-target",
-			Status:        types.PermissionStatusPending,
-			CreatedAt:     time.Now(),
-			UpdatedAt:     time.Now(),
+	t.Run("delete access policy", func(t *testing.T) {
+		now := time.Now()
+		policy := &types.AccessPolicy{
+			Name:       "to-delete",
+			CallerTags: []string{"temp"},
+			TargetTags: []string{"temp"},
+			Action:     "allow",
+			Priority:   10,
+			Enabled:    true,
+			CreatedAt:  now,
+			UpdatedAt:  now,
 		}
 
-		err := tc.storage.CreatePermissionApproval(tc.ctx, approval1)
+		err := tc.storage.CreateAccessPolicy(tc.ctx, policy)
 		require.NoError(t, err)
 
-		// Try to create duplicate
-		approval2 := &types.PermissionApproval{
-			CallerDID:     "did:web:localhost:agents:unique-caller",
-			TargetDID:     "did:web:localhost:agents:unique-target",
-			CallerAgentID: "unique-caller",
-			TargetAgentID: "unique-target",
-			Status:        types.PermissionStatusPending,
-			CreatedAt:     time.Now(),
-			UpdatedAt:     time.Now(),
-		}
-
-		err = tc.storage.CreatePermissionApproval(tc.ctx, approval2)
-		assert.Error(t, err, "expected unique constraint violation")
-	})
-}
-
-func TestVCAuth_Phase1_Storage_ProtectedAgentRules(t *testing.T) {
-	tc := setupTestContext(t)
-
-	t.Run("create and retrieve protected agent rule", func(t *testing.T) {
-		rule := &types.ProtectedAgentRule{
-			PatternType: types.PatternTypeTag,
-			Pattern:     "admin",
-			Enabled:     true,
-			CreatedAt:   time.Now(),
-			UpdatedAt:   time.Now(),
-		}
-
-		err := tc.storage.CreateProtectedAgentRule(tc.ctx, rule)
-		require.NoError(t, err)
-		assert.NotZero(t, rule.ID)
-
-		// Retrieve all rules
-		rules, err := tc.storage.GetProtectedAgentRules(tc.ctx)
+		err = tc.storage.DeleteAccessPolicy(tc.ctx, policy.ID)
 		require.NoError(t, err)
 
-		found := false
-		for _, r := range rules {
-			if r.ID == rule.ID {
-				found = true
-				assert.Equal(t, types.PatternTypeTag, r.PatternType)
-				assert.Equal(t, "admin", r.Pattern)
-				break
-			}
-		}
-		assert.True(t, found, "expected rule in list")
-	})
-
-	t.Run("create rule with pattern types", func(t *testing.T) {
-		// Tag pattern
-		tagPatternRule := &types.ProtectedAgentRule{
-			PatternType: types.PatternTypeTagPattern,
-			Pattern:     "finance*",
-			Enabled:     true,
-			CreatedAt:   time.Now(),
-			UpdatedAt:   time.Now(),
-		}
-		err := tc.storage.CreateProtectedAgentRule(tc.ctx, tagPatternRule)
-		require.NoError(t, err)
-
-		// Agent ID pattern
-		agentIDRule := &types.ProtectedAgentRule{
-			PatternType: types.PatternTypeAgentID,
-			Pattern:     "payment-gateway",
-			Enabled:     true,
-			CreatedAt:   time.Now(),
-			UpdatedAt:   time.Now(),
-		}
-		err = tc.storage.CreateProtectedAgentRule(tc.ctx, agentIDRule)
-		require.NoError(t, err)
-	})
-
-	t.Run("delete protected agent rule", func(t *testing.T) {
-		rule := &types.ProtectedAgentRule{
-			PatternType: types.PatternTypeTag,
-			Pattern:     "to-delete",
-			Enabled:     true,
-			CreatedAt:   time.Now(),
-			UpdatedAt:   time.Now(),
-		}
-
-		err := tc.storage.CreateProtectedAgentRule(tc.ctx, rule)
-		require.NoError(t, err)
-
-		// Delete the rule
-		err = tc.storage.DeleteProtectedAgentRule(tc.ctx, rule.ID)
-		require.NoError(t, err)
-
-		// Verify it's deleted
-		rules, err := tc.storage.GetProtectedAgentRules(tc.ctx)
-		require.NoError(t, err)
-
-		for _, r := range rules {
-			assert.NotEqual(t, rule.ID, r.ID, "deleted rule should not be in list")
-		}
+		_, err = tc.storage.GetAccessPolicyByID(tc.ctx, policy.ID)
+		assert.Error(t, err, "deleted policy should not be retrievable")
 	})
 }
 
@@ -674,178 +550,105 @@ func TestVCAuth_Phase2_Service_DIDWebService(t *testing.T) {
 	})
 }
 
-func TestVCAuth_Phase2_Service_PermissionService(t *testing.T) {
+func TestVCAuth_Phase2_Service_AccessPolicyService(t *testing.T) {
 	tc := setupTestContext(t)
 
-	t.Run("is enabled returns correct state", func(t *testing.T) {
-		assert.True(t, tc.permissionService.IsEnabled())
-	})
-
-	t.Run("request permission creates pending approval", func(t *testing.T) {
-		req := &types.PermissionRequest{
-			CallerDID:     "did:web:localhost:agents:perm-caller-1",
-			TargetDID:     "did:web:localhost:agents:perm-target-1",
-			CallerAgentID: "perm-caller-1",
-			TargetAgentID: "perm-target-1",
-			Reason:        "Testing permission request",
+	t.Run("add and evaluate allow policy", func(t *testing.T) {
+		req := &types.AccessPolicyRequest{
+			Name:           "analytics-to-data",
+			CallerTags:     []string{"analytics"},
+			TargetTags:     []string{"data-service"},
+			AllowFunctions: []string{"query_*", "get_*"},
+			DenyFunctions:  []string{"delete_*"},
+			Constraints: map[string]types.AccessConstraint{
+				"limit": {Operator: "<=", Value: float64(1000)},
+			},
+			Action:   "allow",
+			Priority: 100,
 		}
 
-		approval, err := tc.permissionService.RequestPermission(tc.ctx, req)
+		policy, err := tc.accessPolicyService.AddPolicy(tc.ctx, req)
 		require.NoError(t, err)
-		assert.NotZero(t, approval.ID)
-		assert.Equal(t, types.PermissionStatusPending, approval.Status)
-	})
+		assert.NotZero(t, policy.ID)
 
-	t.Run("request permission returns existing if duplicate", func(t *testing.T) {
-		req := &types.PermissionRequest{
-			CallerDID:     "did:web:localhost:agents:dup-caller",
-			TargetDID:     "did:web:localhost:agents:dup-target",
-			CallerAgentID: "dup-caller",
-			TargetAgentID: "dup-target",
-			Reason:        "First request",
-		}
-
-		approval1, err := tc.permissionService.RequestPermission(tc.ctx, req)
-		require.NoError(t, err)
-
-		// Same request
-		req.Reason = "Second request"
-		approval2, err := tc.permissionService.RequestPermission(tc.ctx, req)
-		require.NoError(t, err)
-		assert.Equal(t, approval1.ID, approval2.ID, "should return existing approval")
-	})
-
-	t.Run("approve permission", func(t *testing.T) {
-		req := &types.PermissionRequest{
-			CallerDID:     "did:web:localhost:agents:to-approve-caller",
-			TargetDID:     "did:web:localhost:agents:to-approve-target",
-			CallerAgentID: "to-approve-caller",
-			TargetAgentID: "to-approve-target",
-			Reason:        "To be approved",
-		}
-
-		approval, err := tc.permissionService.RequestPermission(tc.ctx, req)
-		require.NoError(t, err)
-
-		// Approve
-		durationHours := 24
-		approved, err := tc.permissionService.ApprovePermission(tc.ctx, approval.ID, "admin", &durationHours)
-		require.NoError(t, err)
-		assert.Equal(t, types.PermissionStatusApproved, approved.Status)
-		assert.NotNil(t, approved.ApprovedBy)
-		assert.NotNil(t, approved.ApprovedAt)
-		assert.NotNil(t, approved.ExpiresAt)
-	})
-
-	t.Run("reject permission", func(t *testing.T) {
-		req := &types.PermissionRequest{
-			CallerDID:     "did:web:localhost:agents:to-reject-caller",
-			TargetDID:     "did:web:localhost:agents:to-reject-target",
-			CallerAgentID: "to-reject-caller",
-			TargetAgentID: "to-reject-target",
-		}
-
-		approval, err := tc.permissionService.RequestPermission(tc.ctx, req)
-		require.NoError(t, err)
-
-		// Reject
-		rejected, err := tc.permissionService.RejectPermission(tc.ctx, approval.ID, "admin", "Access denied")
-		require.NoError(t, err)
-		assert.Equal(t, types.PermissionStatusRejected, rejected.Status)
-	})
-
-	t.Run("revoke approved permission", func(t *testing.T) {
-		req := &types.PermissionRequest{
-			CallerDID:     "did:web:localhost:agents:to-revoke-caller",
-			TargetDID:     "did:web:localhost:agents:to-revoke-target",
-			CallerAgentID: "to-revoke-caller",
-			TargetAgentID: "to-revoke-target",
-		}
-
-		approval, err := tc.permissionService.RequestPermission(tc.ctx, req)
-		require.NoError(t, err)
-
-		// Approve first
-		approved, err := tc.permissionService.ApprovePermission(tc.ctx, approval.ID, "admin", nil)
-		require.NoError(t, err)
-
-		// Revoke
-		revoked, err := tc.permissionService.RevokePermission(tc.ctx, approved.ID, "admin", "Security concern")
-		require.NoError(t, err)
-		assert.Equal(t, types.PermissionStatusRevoked, revoked.Status)
-	})
-
-	t.Run("protected agent rule matching", func(t *testing.T) {
-		// Add a protected agent rule
-		rule := &types.ProtectedAgentRuleRequest{
-			PatternType: types.PatternTypeTag,
-			Pattern:     "protected",
-			Description: "Protected tag rule",
-		}
-		_, err := tc.permissionService.AddProtectedAgentRule(tc.ctx, rule)
-		require.NoError(t, err)
-
-		// Check if agent with protected tag is protected
-		isProtected := tc.permissionService.IsAgentProtected("any-agent", []string{"protected"})
-		assert.True(t, isProtected)
-
-		// Check unprotected agent
-		isProtected = tc.permissionService.IsAgentProtected("any-agent", []string{"regular"})
-		assert.False(t, isProtected)
-	})
-
-	t.Run("check permission for protected agent", func(t *testing.T) {
-		// Add protection rule for "admin" tag
-		rule := &types.ProtectedAgentRuleRequest{
-			PatternType: types.PatternTypeTag,
-			Pattern:     "admin-check",
-		}
-		_, err := tc.permissionService.AddProtectedAgentRule(tc.ctx, rule)
-		require.NoError(t, err)
-
-		// Check permission without approval
-		check, err := tc.permissionService.CheckPermission(
-			tc.ctx,
-			"did:web:localhost:agents:check-caller",
-			"did:web:localhost:agents:check-target",
-			"check-target",
-			[]string{"admin-check"},
+		// Evaluate: analytics caller → data-service target → query_data → allowed
+		result := tc.accessPolicyService.EvaluateAccess(
+			[]string{"analytics"}, []string{"data-service"},
+			"query_data", map[string]any{"limit": float64(500)},
 		)
-		require.NoError(t, err)
-		assert.True(t, check.RequiresPermission)
-		assert.False(t, check.HasValidApproval)
+		assert.True(t, result.Matched, "policy should match")
+		assert.True(t, result.Allowed, "access should be allowed")
+		assert.Equal(t, "analytics-to-data", result.PolicyName)
 	})
 
-	t.Run("check permission with valid approval", func(t *testing.T) {
-		// Add protection rule
-		rule := &types.ProtectedAgentRuleRequest{
-			PatternType: types.PatternTypeTag,
-			Pattern:     "approved-tag",
-		}
-		_, err := tc.permissionService.AddProtectedAgentRule(tc.ctx, rule)
-		require.NoError(t, err)
-
-		// Create and approve permission
-		req := &types.PermissionRequest{
-			CallerDID:     "did:web:localhost:agents:approved-caller",
-			TargetDID:     "did:web:localhost:agents:approved-target",
-			CallerAgentID: "approved-caller",
-			TargetAgentID: "approved-target",
-		}
-		approval, _ := tc.permissionService.RequestPermission(tc.ctx, req)
-		_, _ = tc.permissionService.ApprovePermission(tc.ctx, approval.ID, "admin", nil)
-
-		// Check permission
-		check, err := tc.permissionService.CheckPermission(
-			tc.ctx,
-			req.CallerDID,
-			req.TargetDID,
-			"approved-target",
-			[]string{"approved-tag"},
+	t.Run("deny function takes precedence", func(t *testing.T) {
+		result := tc.accessPolicyService.EvaluateAccess(
+			[]string{"analytics"}, []string{"data-service"},
+			"delete_records", map[string]any{},
 		)
+		assert.True(t, result.Matched, "policy should match")
+		assert.False(t, result.Allowed, "delete should be denied")
+		assert.Contains(t, result.Reason, "denied")
+	})
+
+	t.Run("constraint violation denies access", func(t *testing.T) {
+		result := tc.accessPolicyService.EvaluateAccess(
+			[]string{"analytics"}, []string{"data-service"},
+			"query_data", map[string]any{"limit": float64(5000)},
+		)
+		assert.True(t, result.Matched, "policy should match")
+		assert.False(t, result.Allowed, "over-limit query should be denied")
+		assert.Contains(t, result.Reason, "Constraint violation")
+	})
+
+	t.Run("non-matching tags yield no match", func(t *testing.T) {
+		result := tc.accessPolicyService.EvaluateAccess(
+			[]string{"unknown"}, []string{"data-service"},
+			"query_data", nil,
+		)
+		assert.False(t, result.Matched, "policy should not match for unknown caller tag")
+	})
+
+	t.Run("update policy changes behavior", func(t *testing.T) {
+		policies, err := tc.accessPolicyService.ListPolicies(tc.ctx)
 		require.NoError(t, err)
-		assert.True(t, check.RequiresPermission)
-		assert.True(t, check.HasValidApproval)
+		require.NotEmpty(t, policies)
+
+		policyID := policies[0].ID
+
+		updateReq := &types.AccessPolicyRequest{
+			Name:       "analytics-to-data-updated",
+			CallerTags: []string{"analytics"},
+			TargetTags: []string{"data-service"},
+			Action:     "deny", // Changed to deny
+			Priority:   100,
+		}
+
+		updated, err := tc.accessPolicyService.UpdatePolicy(tc.ctx, policyID, updateReq)
+		require.NoError(t, err)
+		assert.Equal(t, "deny", updated.Action)
+
+		result := tc.accessPolicyService.EvaluateAccess(
+			[]string{"analytics"}, []string{"data-service"},
+			"query_data", nil,
+		)
+		assert.True(t, result.Matched)
+		assert.False(t, result.Allowed, "should be denied after policy update")
+	})
+
+	t.Run("remove policy removes enforcement", func(t *testing.T) {
+		policies, err := tc.accessPolicyService.ListPolicies(tc.ctx)
+		require.NoError(t, err)
+		require.NotEmpty(t, policies)
+
+		err = tc.accessPolicyService.RemovePolicy(tc.ctx, policies[0].ID)
+		require.NoError(t, err)
+
+		result := tc.accessPolicyService.EvaluateAccess(
+			[]string{"analytics"}, []string{"data-service"},
+			"query_data", nil,
+		)
+		assert.False(t, result.Matched, "no policy should match after deletion")
 	})
 }
 
@@ -1015,547 +818,8 @@ func TestVCAuth_Phase3_Middleware_DIDAuth(t *testing.T) {
 }
 
 // =============================================================================
-// Phase 4: API Handler Tests
-// =============================================================================
-
-func TestVCAuth_Phase4_Handlers_PermissionAPI(t *testing.T) {
-	tc := setupTestContext(t)
-
-	// Set up permission handlers
-	permissionHandlers := handlers.NewPermissionHandlers(tc.permissionService, tc.storage, tc.didWebService)
-	adminPermHandlers := adminhandlers.NewPermissionAdminHandlers(tc.permissionService)
-
-	// Register routes
-	api := tc.router.Group("/api/v1")
-	permissionHandlers.RegisterRoutes(api)
-	adminPermHandlers.RegisterRoutes(api)
-
-	t.Run("POST /permissions/request creates pending approval", func(t *testing.T) {
-		body := `{
-			"caller_did": "did:web:localhost:agents:api-caller",
-			"target_did": "did:web:localhost:agents:api-target",
-			"caller_agent_id": "api-caller",
-			"target_agent_id": "api-target",
-			"reason": "API test"
-		}`
-
-		req := httptest.NewRequest("POST", "/api/v1/permissions/request", strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Caller-DID", "did:web:localhost:agents:api-caller")
-		w := httptest.NewRecorder()
-		tc.router.ServeHTTP(w, req)
-
-		assert.Equal(t, 201, w.Code)
-
-		var approval types.PermissionApproval
-		err := json.Unmarshal(w.Body.Bytes(), &approval)
-		require.NoError(t, err)
-		assert.Equal(t, types.PermissionStatusPending, approval.Status)
-	})
-
-	t.Run("GET /permissions/check returns permission status", func(t *testing.T) {
-		// Register a target agent so the handler can resolve it
-		checkTarget := &types.AgentNode{
-			ID:             "check-target",
-			Version:        "1.0.0",
-			DeploymentType: "long_running",
-		}
-		_ = tc.storage.RegisterAgent(tc.ctx, checkTarget)
-
-		req := httptest.NewRequest("GET",
-			"/api/v1/permissions/check?caller_did=did:web:localhost:agents:check-caller&target_agent_id=check-target",
-			nil)
-		w := httptest.NewRecorder()
-		tc.router.ServeHTTP(w, req)
-
-		assert.Equal(t, 200, w.Code)
-
-		var check types.PermissionCheck
-		err := json.Unmarshal(w.Body.Bytes(), &check)
-		require.NoError(t, err)
-	})
-
-	t.Run("GET /admin/permissions/pending lists pending requests", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/api/v1/admin/permissions/pending", nil)
-		w := httptest.NewRecorder()
-		tc.router.ServeHTTP(w, req)
-
-		assert.Equal(t, 200, w.Code)
-
-		var response struct {
-			Permissions []*types.PermissionApproval `json:"permissions"`
-			Total       int                         `json:"total"`
-		}
-		err := json.Unmarshal(w.Body.Bytes(), &response)
-		require.NoError(t, err)
-	})
-
-	t.Run("POST /admin/permissions/:id/approve approves request", func(t *testing.T) {
-		// First create a pending request
-		createBody := `{
-			"caller_did": "did:web:localhost:agents:to-approve-api",
-			"target_did": "did:web:localhost:agents:target-api",
-			"caller_agent_id": "to-approve-api",
-			"target_agent_id": "target-api"
-		}`
-		createReq := httptest.NewRequest("POST", "/api/v1/permissions/request", strings.NewReader(createBody))
-		createReq.Header.Set("Content-Type", "application/json")
-		createReq.Header.Set("X-Caller-DID", "did:web:localhost:agents:to-approve-api")
-		createW := httptest.NewRecorder()
-		tc.router.ServeHTTP(createW, createReq)
-		require.Equal(t, 201, createW.Code)
-
-		var created types.PermissionApproval
-		json.Unmarshal(createW.Body.Bytes(), &created)
-
-		// Approve it
-		approveBody := `{"duration_hours": 24}`
-		approveReq := httptest.NewRequest("POST",
-			fmt.Sprintf("/api/v1/admin/permissions/%d/approve", created.ID),
-			strings.NewReader(approveBody))
-		approveReq.Header.Set("Content-Type", "application/json")
-		approveW := httptest.NewRecorder()
-		tc.router.ServeHTTP(approveW, approveReq)
-
-		assert.Equal(t, 200, approveW.Code)
-
-		var approved types.PermissionApproval
-		json.Unmarshal(approveW.Body.Bytes(), &approved)
-		assert.Equal(t, types.PermissionStatusApproved, approved.Status)
-	})
-
-	t.Run("POST /admin/permissions/:id/reject rejects request", func(t *testing.T) {
-		// Create pending request
-		createBody := `{
-			"caller_did": "did:web:localhost:agents:to-reject-api",
-			"target_did": "did:web:localhost:agents:target-reject-api",
-			"caller_agent_id": "to-reject-api",
-			"target_agent_id": "target-reject-api"
-		}`
-		createReq := httptest.NewRequest("POST", "/api/v1/permissions/request", strings.NewReader(createBody))
-		createReq.Header.Set("Content-Type", "application/json")
-		createReq.Header.Set("X-Caller-DID", "did:web:localhost:agents:to-reject-api")
-		createW := httptest.NewRecorder()
-		tc.router.ServeHTTP(createW, createReq)
-
-		var created types.PermissionApproval
-		json.Unmarshal(createW.Body.Bytes(), &created)
-
-		// Reject it
-		rejectBody := `{"reason": "Access denied"}`
-		rejectReq := httptest.NewRequest("POST",
-			fmt.Sprintf("/api/v1/admin/permissions/%d/reject", created.ID),
-			strings.NewReader(rejectBody))
-		rejectReq.Header.Set("Content-Type", "application/json")
-		rejectW := httptest.NewRecorder()
-		tc.router.ServeHTTP(rejectW, rejectReq)
-
-		assert.Equal(t, 200, rejectW.Code)
-
-		var rejected types.PermissionApproval
-		json.Unmarshal(rejectW.Body.Bytes(), &rejected)
-		assert.Equal(t, types.PermissionStatusRejected, rejected.Status)
-	})
-
-	t.Run("POST /admin/permissions/:id/revoke revokes approved permission", func(t *testing.T) {
-		// Create and approve
-		createBody := `{
-			"caller_did": "did:web:localhost:agents:to-revoke-api",
-			"target_did": "did:web:localhost:agents:target-revoke-api",
-			"caller_agent_id": "to-revoke-api",
-			"target_agent_id": "target-revoke-api"
-		}`
-		createReq := httptest.NewRequest("POST", "/api/v1/permissions/request", strings.NewReader(createBody))
-		createReq.Header.Set("Content-Type", "application/json")
-		createReq.Header.Set("X-Caller-DID", "did:web:localhost:agents:to-revoke-api")
-		createW := httptest.NewRecorder()
-		tc.router.ServeHTTP(createW, createReq)
-
-		var created types.PermissionApproval
-		json.Unmarshal(createW.Body.Bytes(), &created)
-
-		// Approve
-		approveReq := httptest.NewRequest("POST",
-			fmt.Sprintf("/api/v1/admin/permissions/%d/approve", created.ID),
-			strings.NewReader(`{}`))
-		approveReq.Header.Set("Content-Type", "application/json")
-		approveW := httptest.NewRecorder()
-		tc.router.ServeHTTP(approveW, approveReq)
-
-		// Revoke
-		revokeBody := `{"reason": "Security concern"}`
-		revokeReq := httptest.NewRequest("POST",
-			fmt.Sprintf("/api/v1/admin/permissions/%d/revoke", created.ID),
-			strings.NewReader(revokeBody))
-		revokeReq.Header.Set("Content-Type", "application/json")
-		revokeW := httptest.NewRecorder()
-		tc.router.ServeHTTP(revokeW, revokeReq)
-
-		assert.Equal(t, 200, revokeW.Code)
-
-		var revoked types.PermissionApproval
-		json.Unmarshal(revokeW.Body.Bytes(), &revoked)
-		assert.Equal(t, types.PermissionStatusRevoked, revoked.Status)
-	})
-}
-
-func TestVCAuth_Phase4_Handlers_ProtectedAgentsAPI(t *testing.T) {
-	tc := setupTestContext(t)
-
-	adminPermHandlers := adminhandlers.NewPermissionAdminHandlers(tc.permissionService)
-	api := tc.router.Group("/api/v1")
-	adminPermHandlers.RegisterRoutes(api)
-
-	t.Run("POST /admin/protected-agents creates rule", func(t *testing.T) {
-		body := `{
-			"pattern_type": "tag",
-			"pattern": "api-test-rule",
-			"description": "Test rule from API"
-		}`
-
-		req := httptest.NewRequest("POST", "/api/v1/admin/protected-agents", strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
-		tc.router.ServeHTTP(w, req)
-
-		assert.Equal(t, 201, w.Code)
-
-		var rule types.ProtectedAgentRule
-		json.Unmarshal(w.Body.Bytes(), &rule)
-		assert.Equal(t, "api-test-rule", rule.Pattern)
-	})
-
-	t.Run("GET /admin/protected-agents lists rules", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/api/v1/admin/protected-agents", nil)
-		w := httptest.NewRecorder()
-		tc.router.ServeHTTP(w, req)
-
-		assert.Equal(t, 200, w.Code)
-
-		var response struct {
-			Rules []*types.ProtectedAgentRule `json:"rules"`
-			Total int                         `json:"total"`
-		}
-		json.Unmarshal(w.Body.Bytes(), &response)
-		assert.GreaterOrEqual(t, len(response.Rules), 0)
-	})
-
-	t.Run("DELETE /admin/protected-agents/:id removes rule", func(t *testing.T) {
-		// Create a rule first
-		createBody := `{
-			"pattern_type": "tag",
-			"pattern": "to-delete-api",
-			"description": "To be deleted"
-		}`
-		createReq := httptest.NewRequest("POST", "/api/v1/admin/protected-agents", strings.NewReader(createBody))
-		createReq.Header.Set("Content-Type", "application/json")
-		createW := httptest.NewRecorder()
-		tc.router.ServeHTTP(createW, createReq)
-
-		var rule types.ProtectedAgentRule
-		json.Unmarshal(createW.Body.Bytes(), &rule)
-
-		// Delete it
-		deleteReq := httptest.NewRequest("DELETE", fmt.Sprintf("/api/v1/admin/protected-agents/%d", rule.ID), nil)
-		deleteW := httptest.NewRecorder()
-		tc.router.ServeHTTP(deleteW, deleteReq)
-
-		assert.Equal(t, 200, deleteW.Code)
-	})
-}
-
-// =============================================================================
 // Phase 5: End-to-End Integration Tests
 // =============================================================================
-
-func TestVCAuth_Phase5_EndToEnd_FullPermissionFlow(t *testing.T) {
-	tc := setupTestContext(t)
-
-	// Set up the complete routing with middlewares
-	permissionHandlers := handlers.NewPermissionHandlers(tc.permissionService, tc.storage, tc.didWebService)
-	adminPermHandlers := adminhandlers.NewPermissionAdminHandlers(tc.permissionService)
-
-	api := tc.router.Group("/api/v1")
-	permissionHandlers.RegisterRoutes(api)
-	adminPermHandlers.RegisterRoutes(api)
-
-	t.Run("complete flow: create protection rule, request permission, approve, verify", func(t *testing.T) {
-		// Step 1: Create a protected agent rule for "sensitive" tag
-		// Note: Tags are stored as "key:value", so pattern must match full tag format
-		ruleBody := `{"pattern_type": "tag", "pattern": "e2e-sensitive:true", "description": "Sensitive agents"}`
-		ruleReq := httptest.NewRequest("POST", "/api/v1/admin/protected-agents", strings.NewReader(ruleBody))
-		ruleReq.Header.Set("Content-Type", "application/json")
-		ruleW := httptest.NewRecorder()
-		tc.router.ServeHTTP(ruleW, ruleReq)
-		require.Equal(t, 201, ruleW.Code)
-
-		// Step 2: Create test agents (caller and target)
-		callerAgentID := "e2e-caller-agent"
-		targetAgentID := "e2e-target-agent"
-
-		tc.createTestAgent(callerAgentID, nil)
-		tc.createTestAgent(targetAgentID, map[string]string{"e2e-sensitive": "true"})
-
-		callerDID := tc.didWebService.GenerateDIDWeb(callerAgentID)
-		targetDID := tc.didWebService.GenerateDIDWeb(targetAgentID)
-
-		// Step 3: Check permission (should require permission, not have approval)
-		// Note: DIDs must be URL-encoded because they contain %3A which would otherwise be decoded
-		checkURL := fmt.Sprintf("/api/v1/permissions/check?caller_did=%s&target_did=%s&target_agent_id=%s",
-			url.QueryEscape(callerDID), url.QueryEscape(targetDID), url.QueryEscape(targetAgentID))
-		checkReq := httptest.NewRequest("GET", checkURL, nil)
-		checkW := httptest.NewRecorder()
-		tc.router.ServeHTTP(checkW, checkReq)
-		require.Equal(t, 200, checkW.Code)
-
-		var initialCheck types.PermissionCheck
-		json.Unmarshal(checkW.Body.Bytes(), &initialCheck)
-
-		// Step 4: Request permission
-		requestBody := fmt.Sprintf(`{
-			"caller_did": "%s",
-			"target_did": "%s",
-			"caller_agent_id": "%s",
-			"target_agent_id": "%s",
-			"reason": "E2E test"
-		}`, callerDID, targetDID, callerAgentID, targetAgentID)
-
-		requestReq := httptest.NewRequest("POST", "/api/v1/permissions/request", strings.NewReader(requestBody))
-		requestReq.Header.Set("Content-Type", "application/json")
-		requestReq.Header.Set("X-Caller-DID", callerDID)
-		requestW := httptest.NewRecorder()
-		tc.router.ServeHTTP(requestW, requestReq)
-		require.Equal(t, 201, requestW.Code)
-
-		var pendingApproval types.PermissionApproval
-		json.Unmarshal(requestW.Body.Bytes(), &pendingApproval)
-		assert.Equal(t, types.PermissionStatusPending, pendingApproval.Status)
-
-		// Step 5: List pending permissions (admin sees request)
-		listReq := httptest.NewRequest("GET", "/api/v1/admin/permissions/pending", nil)
-		listW := httptest.NewRecorder()
-		tc.router.ServeHTTP(listW, listReq)
-		require.Equal(t, 200, listW.Code)
-
-		// Step 6: Admin approves the request
-		approveReq := httptest.NewRequest("POST",
-			fmt.Sprintf("/api/v1/admin/permissions/%d/approve", pendingApproval.ID),
-			strings.NewReader(`{"duration_hours": 720}`))
-		approveReq.Header.Set("Content-Type", "application/json")
-		approveW := httptest.NewRecorder()
-		tc.router.ServeHTTP(approveW, approveReq)
-		require.Equal(t, 200, approveW.Code)
-
-		var approvedPermission types.PermissionApproval
-		json.Unmarshal(approveW.Body.Bytes(), &approvedPermission)
-		assert.Equal(t, types.PermissionStatusApproved, approvedPermission.Status)
-		assert.NotNil(t, approvedPermission.ExpiresAt)
-
-		// Step 7: Check permission again (now should have valid approval)
-		checkReq2 := httptest.NewRequest("GET", checkURL, nil)
-		checkW2 := httptest.NewRecorder()
-		tc.router.ServeHTTP(checkW2, checkReq2)
-		require.Equal(t, 200, checkW2.Code)
-
-		var finalCheck types.PermissionCheck
-		json.Unmarshal(checkW2.Body.Bytes(), &finalCheck)
-	})
-
-	t.Run("complete flow: revoke permission blocks subsequent access", func(t *testing.T) {
-		// Create unique agents for this test
-		callerID := "revoke-test-caller"
-		targetID := "revoke-test-target"
-		tc.createTestAgent(callerID, nil)
-		tc.createTestAgent(targetID, map[string]string{"restricted": "true"})
-
-		// Add protection rule
-		// Note: Tags are stored as "key:value", so pattern must match full tag format
-		ruleBody := `{"pattern_type": "tag", "pattern": "restricted:true"}`
-		ruleReq := httptest.NewRequest("POST", "/api/v1/admin/protected-agents", strings.NewReader(ruleBody))
-		ruleReq.Header.Set("Content-Type", "application/json")
-		tc.router.ServeHTTP(httptest.NewRecorder(), ruleReq)
-
-		callerDID := tc.didWebService.GenerateDIDWeb(callerID)
-		targetDID := tc.didWebService.GenerateDIDWeb(targetID)
-
-		// Request permission (with proper headers)
-		requestBody := fmt.Sprintf(`{
-			"caller_did": "%s",
-			"target_did": "%s",
-			"caller_agent_id": "%s",
-			"target_agent_id": "%s"
-		}`, callerDID, targetDID, callerID, targetID)
-
-		t.Logf("Creating permission request: callerDID=%s, targetDID=%s", callerDID, targetDID)
-		permReq := httptest.NewRequest("POST", "/api/v1/permissions/request", strings.NewReader(requestBody))
-		permReq.Header.Set("Content-Type", "application/json")
-		permReq.Header.Set("X-Caller-DID", callerDID)
-		requestW := httptest.NewRecorder()
-		tc.router.ServeHTTP(requestW, permReq)
-		require.Equal(t, 201, requestW.Code, "permission request should succeed: %s", requestW.Body.String())
-
-		var approval types.PermissionApproval
-		require.NoError(t, json.Unmarshal(requestW.Body.Bytes(), &approval))
-		require.NotZero(t, approval.ID, "approval ID should be set")
-		t.Logf("Created approval: ID=%d, CallerDID=%s, TargetDID=%s, Status=%s",
-			approval.ID, approval.CallerDID, approval.TargetDID, approval.Status)
-
-		// Approve (with proper headers)
-		approveReq := httptest.NewRequest("POST",
-			fmt.Sprintf("/api/v1/admin/permissions/%d/approve", approval.ID),
-			strings.NewReader(`{}`))
-		approveReq.Header.Set("Content-Type", "application/json")
-		approveW := httptest.NewRecorder()
-		tc.router.ServeHTTP(approveW, approveReq)
-		require.Equal(t, 200, approveW.Code, "approve should succeed: %s", approveW.Body.String())
-
-		var approvedApproval types.PermissionApproval
-		require.NoError(t, json.Unmarshal(approveW.Body.Bytes(), &approvedApproval))
-		t.Logf("After approve: Status=%s, ID=%d", approvedApproval.Status, approvedApproval.ID)
-
-		// Check permission is valid - include target_agent_id so tags can be looked up
-		// Note: DIDs must be URL-encoded because they contain %3A which would otherwise be decoded
-		checkURL := fmt.Sprintf("/api/v1/permissions/check?caller_did=%s&target_did=%s&target_agent_id=%s",
-			url.QueryEscape(callerDID), url.QueryEscape(targetDID), url.QueryEscape(targetID))
-		checkW := httptest.NewRecorder()
-		tc.router.ServeHTTP(checkW, httptest.NewRequest("GET", checkURL, nil))
-		require.Equal(t, 200, checkW.Code, "check should succeed: %s", checkW.Body.String())
-
-		var check types.PermissionCheck
-		require.NoError(t, json.Unmarshal(checkW.Body.Bytes(), &check))
-		t.Logf("Check response: RequiresPermission=%v, HasValidApproval=%v, ApprovalStatus=%s, ApprovalID=%v",
-			check.RequiresPermission, check.HasValidApproval, check.ApprovalStatus, check.ApprovalID)
-		require.True(t, check.RequiresPermission, "agent should be protected")
-		require.True(t, check.HasValidApproval, "should have valid approval after approve (status=%s)", check.ApprovalStatus)
-
-		// Revoke the permission
-		revokeReq := httptest.NewRequest("POST",
-			fmt.Sprintf("/api/v1/admin/permissions/%d/revoke", approval.ID),
-			strings.NewReader(`{"reason": "Security incident"}`))
-		revokeReq.Header.Set("Content-Type", "application/json")
-		revokeW := httptest.NewRecorder()
-		tc.router.ServeHTTP(revokeW, revokeReq)
-		require.Equal(t, 200, revokeW.Code)
-
-		// Check permission again - should no longer have valid approval
-		checkW2 := httptest.NewRecorder()
-		tc.router.ServeHTTP(checkW2, httptest.NewRequest("GET", checkURL, nil))
-
-		var check2 types.PermissionCheck
-		json.Unmarshal(checkW2.Body.Bytes(), &check2)
-		assert.True(t, check2.RequiresPermission, "agent should still be protected")
-		assert.False(t, check2.HasValidApproval, "approval should be invalid after revoke")
-	})
-
-	t.Run("complete flow: revoke then re-request resets to pending and can be re-approved", func(t *testing.T) {
-		// Create unique agents for this test
-		callerID := "re-request-caller"
-		targetID := "re-request-target"
-		tc.createTestAgent(callerID, nil)
-		tc.createTestAgent(targetID, map[string]string{"re-request-protected": "true"})
-
-		// Add protection rule
-		ruleBody := `{"pattern_type": "tag", "pattern": "re-request-protected:true"}`
-		ruleReq := httptest.NewRequest("POST", "/api/v1/admin/protected-agents", strings.NewReader(ruleBody))
-		ruleReq.Header.Set("Content-Type", "application/json")
-		tc.router.ServeHTTP(httptest.NewRecorder(), ruleReq)
-
-		callerDID := tc.didWebService.GenerateDIDWeb(callerID)
-		targetDID := tc.didWebService.GenerateDIDWeb(targetID)
-
-		checkURL := fmt.Sprintf("/api/v1/permissions/check?caller_did=%s&target_did=%s&target_agent_id=%s",
-			url.QueryEscape(callerDID), url.QueryEscape(targetDID), url.QueryEscape(targetID))
-
-		// Step 1: Request permission
-		requestBody := fmt.Sprintf(`{
-			"caller_did": "%s",
-			"target_did": "%s",
-			"caller_agent_id": "%s",
-			"target_agent_id": "%s",
-			"reason": "Initial request"
-		}`, callerDID, targetDID, callerID, targetID)
-		permReq := httptest.NewRequest("POST", "/api/v1/permissions/request", strings.NewReader(requestBody))
-		permReq.Header.Set("Content-Type", "application/json")
-		permReq.Header.Set("X-Caller-DID", callerDID)
-		requestW := httptest.NewRecorder()
-		tc.router.ServeHTTP(requestW, permReq)
-		require.Equal(t, 201, requestW.Code)
-
-		var approval types.PermissionApproval
-		require.NoError(t, json.Unmarshal(requestW.Body.Bytes(), &approval))
-		approvalID := approval.ID
-
-		// Step 2: Approve
-		approveReq := httptest.NewRequest("POST",
-			fmt.Sprintf("/api/v1/admin/permissions/%d/approve", approvalID),
-			strings.NewReader(`{"duration_hours": 24}`))
-		approveReq.Header.Set("Content-Type", "application/json")
-		approveW := httptest.NewRecorder()
-		tc.router.ServeHTTP(approveW, approveReq)
-		require.Equal(t, 200, approveW.Code)
-
-		// Step 3: Revoke
-		revokeReq := httptest.NewRequest("POST",
-			fmt.Sprintf("/api/v1/admin/permissions/%d/revoke", approvalID),
-			strings.NewReader(`{"reason": "Temporary revocation"}`))
-		revokeReq.Header.Set("Content-Type", "application/json")
-		revokeW := httptest.NewRecorder()
-		tc.router.ServeHTTP(revokeW, revokeReq)
-		require.Equal(t, 200, revokeW.Code)
-
-		// Step 4: Re-request (simulates auto-request after revocation)
-		reRequestBody := fmt.Sprintf(`{
-			"caller_did": "%s",
-			"target_did": "%s",
-			"caller_agent_id": "%s",
-			"target_agent_id": "%s",
-			"reason": "Re-requesting after revocation"
-		}`, callerDID, targetDID, callerID, targetID)
-		reReq := httptest.NewRequest("POST", "/api/v1/permissions/request", strings.NewReader(reRequestBody))
-		reReq.Header.Set("Content-Type", "application/json")
-		reReq.Header.Set("X-Caller-DID", callerDID)
-		reRequestW := httptest.NewRecorder()
-		tc.router.ServeHTTP(reRequestW, reReq)
-		require.Equal(t, 201, reRequestW.Code)
-
-		var reRequested types.PermissionApproval
-		require.NoError(t, json.Unmarshal(reRequestW.Body.Bytes(), &reRequested))
-		assert.Equal(t, types.PermissionStatusPending, reRequested.Status, "re-request should reset to pending")
-		assert.Equal(t, approvalID, reRequested.ID, "should reuse the same record ID")
-		assert.Nil(t, reRequested.RevokedBy, "revocation metadata should be cleared")
-		assert.Nil(t, reRequested.RevokedAt, "revocation timestamp should be cleared")
-
-		// Step 5: Check permission (should show pending)
-		checkW := httptest.NewRecorder()
-		tc.router.ServeHTTP(checkW, httptest.NewRequest("GET", checkURL, nil))
-		require.Equal(t, 200, checkW.Code)
-
-		var check types.PermissionCheck
-		require.NoError(t, json.Unmarshal(checkW.Body.Bytes(), &check))
-		assert.True(t, check.RequiresPermission, "agent should be protected")
-		assert.False(t, check.HasValidApproval, "pending approval should not count as valid")
-		assert.Equal(t, types.PermissionStatusPending, check.ApprovalStatus, "status should be pending")
-
-		// Step 6: Re-approve
-		reApproveReq := httptest.NewRequest("POST",
-			fmt.Sprintf("/api/v1/admin/permissions/%d/approve", approvalID),
-			strings.NewReader(`{"duration_hours": 48}`))
-		reApproveReq.Header.Set("Content-Type", "application/json")
-		reApproveW := httptest.NewRecorder()
-		tc.router.ServeHTTP(reApproveW, reApproveReq)
-		require.Equal(t, 200, reApproveW.Code, "re-approval should succeed: %s", reApproveW.Body.String())
-
-		// Step 7: Verify permission is valid again
-		checkW2 := httptest.NewRecorder()
-		tc.router.ServeHTTP(checkW2, httptest.NewRequest("GET", checkURL, nil))
-		require.Equal(t, 200, checkW2.Code)
-
-		var check2 types.PermissionCheck
-		require.NoError(t, json.Unmarshal(checkW2.Body.Bytes(), &check2))
-		assert.True(t, check2.RequiresPermission, "agent should be protected")
-		assert.True(t, check2.HasValidApproval, "re-approved permission should be valid")
-	})
-}
 
 func TestVCAuth_Phase5_EndToEnd_DIDAuthentication(t *testing.T) {
 	tc := setupTestContext(t)
@@ -1762,127 +1026,6 @@ func TestVCAuth_Phase6_SDK_GoClientDIDAuth(t *testing.T) {
 
 		t.Logf("SDK signature verification successful for DID: %s", did)
 		t.Logf("Private key JWK (for SDK testing): %s", privateKeyJWK)
-	})
-}
-
-// =============================================================================
-// Additional Edge Case Tests
-// =============================================================================
-
-func TestVCAuth_EdgeCases_PatternMatching(t *testing.T) {
-	tc := setupTestContext(t)
-
-	t.Run("wildcard suffix pattern matching", func(t *testing.T) {
-		rule := &types.ProtectedAgentRuleRequest{
-			PatternType: types.PatternTypeTagPattern,
-			Pattern:     "finance*",
-		}
-		_, err := tc.permissionService.AddProtectedAgentRule(tc.ctx, rule)
-		require.NoError(t, err)
-
-		assert.True(t, tc.permissionService.IsAgentProtected("any", []string{"finance"}))
-		assert.True(t, tc.permissionService.IsAgentProtected("any", []string{"finance-team"}))
-		assert.True(t, tc.permissionService.IsAgentProtected("any", []string{"finance123"}))
-		assert.False(t, tc.permissionService.IsAgentProtected("any", []string{"other-finance"}))
-	})
-
-	t.Run("wildcard prefix pattern matching", func(t *testing.T) {
-		rule := &types.ProtectedAgentRuleRequest{
-			PatternType: types.PatternTypeTagPattern,
-			Pattern:     "*-internal",
-		}
-		_, err := tc.permissionService.AddProtectedAgentRule(tc.ctx, rule)
-		require.NoError(t, err)
-
-		assert.True(t, tc.permissionService.IsAgentProtected("any", []string{"api-internal"}))
-		assert.True(t, tc.permissionService.IsAgentProtected("any", []string{"db-internal"}))
-		assert.False(t, tc.permissionService.IsAgentProtected("any", []string{"internal-api"}))
-	})
-
-	t.Run("agent ID pattern matching", func(t *testing.T) {
-		rule := &types.ProtectedAgentRuleRequest{
-			PatternType: types.PatternTypeAgentID,
-			Pattern:     "payment*",
-		}
-		_, err := tc.permissionService.AddProtectedAgentRule(tc.ctx, rule)
-		require.NoError(t, err)
-
-		assert.True(t, tc.permissionService.IsAgentProtected("payment-gateway", nil))
-		assert.True(t, tc.permissionService.IsAgentProtected("payment-processor", nil))
-		assert.False(t, tc.permissionService.IsAgentProtected("order-service", nil))
-	})
-}
-
-func TestVCAuth_EdgeCases_ExpirationHandling(t *testing.T) {
-	tc := setupTestContext(t)
-
-	t.Run("expired permission is not valid", func(t *testing.T) {
-		// Create approval with past expiration
-		approval := &types.PermissionApproval{
-			CallerDID:     "did:web:localhost:agents:exp-caller",
-			TargetDID:     "did:web:localhost:agents:exp-target",
-			CallerAgentID: "exp-caller",
-			TargetAgentID: "exp-target",
-			Status:        types.PermissionStatusApproved,
-			CreatedAt:     time.Now(),
-			UpdatedAt:     time.Now(),
-		}
-
-		// Set expiration in the past
-		expiredTime := time.Now().Add(-1 * time.Hour)
-		approval.ExpiresAt = &expiredTime
-		approvedAt := time.Now().Add(-2 * time.Hour)
-		approval.ApprovedAt = &approvedAt
-		approvedBy := "admin"
-		approval.ApprovedBy = &approvedBy
-
-		err := tc.storage.CreatePermissionApproval(tc.ctx, approval)
-		require.NoError(t, err)
-
-		// Check IsValid() should return false for expired
-		assert.False(t, approval.IsValid())
-	})
-}
-
-func TestVCAuth_EdgeCases_ConcurrentAccess(t *testing.T) {
-	tc := setupTestContext(t)
-
-	t.Run("concurrent permission requests", func(t *testing.T) {
-		// Create multiple concurrent permission requests
-		done := make(chan bool, 10)
-
-		for i := 0; i < 10; i++ {
-			go func(idx int) {
-				req := &types.PermissionRequest{
-					CallerDID:     fmt.Sprintf("did:web:localhost:agents:concurrent-caller-%d", idx),
-					TargetDID:     fmt.Sprintf("did:web:localhost:agents:concurrent-target-%d", idx),
-					CallerAgentID: fmt.Sprintf("concurrent-caller-%d", idx),
-					TargetAgentID: fmt.Sprintf("concurrent-target-%d", idx),
-				}
-				_, err := tc.permissionService.RequestPermission(tc.ctx, req)
-				if err != nil {
-					t.Errorf("concurrent request %d failed: %v", idx, err)
-				}
-				done <- true
-			}(i)
-		}
-
-		// Wait for all to complete
-		for i := 0; i < 10; i++ {
-			<-done
-		}
-
-		// Verify all were created
-		all, err := tc.permissionService.ListAllPermissions(tc.ctx)
-		require.NoError(t, err)
-
-		concurrentCount := 0
-		for _, p := range all {
-			if strings.HasPrefix(p.CallerAgentID, "concurrent-") {
-				concurrentCount++
-			}
-		}
-		assert.Equal(t, 10, concurrentCount)
 	})
 }
 
@@ -2108,5 +1251,45 @@ func TestVCAuth_Regression_DIDWebDocumentCreatedDuringRegistration(t *testing.T)
 }
 
 // =============================================================================
-// Utility for reading response bodies
+// Phase 8: Re-registration State Preservation (D3)
 // =============================================================================
+
+func TestVCAuth_ReRegistration_PreservesApprovalState(t *testing.T) {
+	tc := setupTestContext(t)
+
+	t.Run("ready agent re-registering stays ready", func(t *testing.T) {
+		agent := &types.AgentNode{
+			ID:              "reregister-ready",
+			LifecycleStatus: types.AgentStatusReady,
+			ApprovedTags:    []string{"finance:billing"},
+			RegisteredAt:    time.Now(),
+		}
+		err := tc.storage.RegisterAgent(tc.ctx, agent)
+		require.NoError(t, err)
+
+		// Verify the agent is ready
+		stored, err := tc.storage.GetAgent(tc.ctx, "reregister-ready")
+		require.NoError(t, err)
+		assert.Equal(t, types.AgentStatusReady, stored.LifecycleStatus)
+		assert.Equal(t, []string{"finance:billing"}, stored.ApprovedTags)
+	})
+
+	t.Run("admin-revoked agent stays pending on re-register", func(t *testing.T) {
+		// Create an agent that was admin-revoked: pending_approval + empty approved tags
+		agent := &types.AgentNode{
+			ID:              "reregister-revoked",
+			LifecycleStatus: types.AgentStatusPendingApproval,
+			ApprovedTags:    nil, // Admin cleared approved tags
+			ProposedTags:    []string{"sensitive"},
+			RegisteredAt:    time.Now(),
+		}
+		err := tc.storage.RegisterAgent(tc.ctx, agent)
+		require.NoError(t, err)
+
+		// Verify admin-revoked state is stored
+		stored, err := tc.storage.GetAgent(tc.ctx, "reregister-revoked")
+		require.NoError(t, err)
+		assert.Equal(t, types.AgentStatusPendingApproval, stored.LifecycleStatus)
+		assert.Empty(t, stored.ApprovedTags)
+	})
+}

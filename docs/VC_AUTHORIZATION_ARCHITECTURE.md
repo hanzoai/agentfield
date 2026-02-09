@@ -1,121 +1,135 @@
 # VC-Based Authorization Architecture
 
-**Version:** 1.2
-**Status:** Implementation
+**Version:** 2.0
+**Status:** Implemented
 **Date:** February 2026
 
 ---
 
 ## Executive Summary
 
-This document describes the Verifiable Credential (VC) based authorization system for AgentField. This system provides a self-service permission request and admin approval workflow for controlling inter-agent communication.
+This document describes the Verifiable Credential (VC) based authorization system for AgentField. The system implements a two-step authorization model: **tag approval** (admin decides which tags agents get) and **policy evaluation** (policies decide which tagged agents can call which other tagged agents).
 
 **Key Principles:**
-- Agents propose tags at registration; admin controls which tags require approval
+- Agents propose tags at registration (agent-level and per-skill/per-reasoner)
+- Control plane evaluates proposed tags against configurable approval rules (`auto`/`manual`/`forbidden`)
 - Default mode is `auto` (all tags auto-approved) for zero-disruption backward compatibility
 - Tags requiring `manual` approval put agents into `pending_approval` state until admin reviews
-- `forbidden` tags reject registration outright
-- Protected agents are defined via config file (pattern-based rules)
-- Agents declare dependencies at registration → creates permission requests proactively
-- Calling protected agents requires admin approval via UI
-- Admin can revoke permissions at any time
-- Control plane issues signed PermissionVCs upon approval
-- `did:web` enables real-time revocation
-- Control plane is source of truth; nodes cache VCs in memory
+- `forbidden` tags reject registration outright (HTTP 403)
+- Tag-based access policies control which agents can call which functions with parameter constraints
+- Upon tag approval, control plane issues a signed `AgentTagVC` (W3C Verifiable Credential) per agent
+- Permission middleware evaluates tag-based access policies; no policy match allows the request (backward compatible)
+- `did:web` enables real-time revocation via control plane-hosted DID documents
+- SDKs support decentralized verification: agents cache policies, revocation lists, and admin public keys locally
+- Control plane is source of truth; agents can verify locally without hitting control plane on every call
 
 ---
 
 ## System Overview
 
-### Flow 1: Registration with Dependencies
+### Flow 1: Registration with Tag Approval
 
-When an agent registers, it declares the tags of agents it intends to call. This creates permission requests proactively, before the first call attempt.
+When an agent registers, it proposes tags at both the agent level and per-skill/per-reasoner level. The control plane evaluates each proposed tag against configured approval rules.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                     REGISTRATION WITH DEPENDENCIES                          │
+│                     REGISTRATION WITH TAG APPROVAL                          │
 └─────────────────────────────────────────────────────────────────────────────┘
 
-  AGENT A                     CONTROL PLANE                         ADMIN
-  (caller)
+  AGENT                         CONTROL PLANE                         ADMIN
      │                              │                                  │
      │  1. Register                 │                                  │
      │  ─────────────────────────►  │                                  │
      │  {                           │                                  │
-     │    tags: ["marketing"],      │   (agent's own identity)        │
-     │    dependencies: ["admin",   │   (tags A intends to call)      │
-     │                   "finance"] │                                  │
+     │    id: "finance-bot",        │                                  │
+     │    skills: [{                │                                  │
+     │      id: "charge",           │                                  │
+     │      proposed_tags:          │                                  │
+     │        ["finance","payment"] │                                  │
+     │    }],                       │                                  │
+     │    reasoners: [{             │                                  │
+     │      id: "analyze",          │                                  │
+     │      proposed_tags: ["nlp"]  │                                  │
+     │    }]                        │                                  │
      │  }                           │                                  │
      │                              │                                  │
-     │                              │  2. Check each dependency:       │
-     │                              │     - "admin" → protected?  YES  │
-     │                              │     - "finance" → protected? YES │
+     │                              │  2. Evaluate tag approval rules: │
+     │                              │     "finance" → manual ⏸        │
+     │                              │     "payment" → manual ⏸        │
+     │                              │     "nlp"     → auto ✓          │
      │                              │                                  │
-     │                              │  3. Create pending requests      │
-     │                              │     for each protected tag       │
+     │                              │  3. Set status: pending_approval │
+     │                              │     Auto-approve "nlp"           │
      │                              │                                  │
-     │  4. Receives did:web         │                                  │
+     │  4. Response                 │                                  │
      │  ◄─────────────────────────  │                                  │
-     │  + warning: 2 permissions    │                                  │
-     │    pending                   │                                  │
+     │  {                           │                                  │
+     │    status: pending_approval, │                                  │
+     │    pending_tags: [finance,   │                                  │
+     │                   payment],  │                                  │
+     │    auto_approved: [nlp]      │                                  │
+     │  }                           │                                  │
      │                              │                                  │
      │                              │  5. Show in Admin UI             │
      │                              │  ─────────────────────────────►  │
-     │                              │  "agent-a needs: admin, finance" │
      │                              │                                  │
-     │                              │                   6. Bulk review │
-     │                              │                   [Approve all]  │
+     │                              │           6. Approve/Modify/Reject│
      │                              │  ◄─────────────────────────────  │
+     │                              │                                  │
+     │                              │  7. Issue AgentTagVC             │
+     │                              │     Set status: starting         │
+     │                              │                                  │
+     │  8. Agent activates          │                                  │
+     │  ◄─────────────────────────  │                                  │
 ```
 
-**Note:** The agent's own tags (`tags: ["marketing"]`) are stored for reference but don't trigger any special processing. They help admins understand what kind of agent is requesting access.
+### Flow 2: Runtime Permission Check (Policy Engine)
 
-### Flow 2: Runtime Permission Check
-
-When an agent calls another agent at runtime, the control plane checks permissions. If no approval exists, it creates a request and rejects the call.
+When an agent calls another agent, the permission middleware evaluates tag-based access policies to decide whether to allow or deny the request.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                        RUNTIME PERMISSION CHECK                             │
+│                     RUNTIME PERMISSION CHECK (POLICY ENGINE)                │
 └─────────────────────────────────────────────────────────────────────────────┘
 
-  AGENT A                     CONTROL PLANE                         ADMIN
-  (caller)
+  AGENT A                     CONTROL PLANE                         AGENT B
+  (caller)                   (permission middleware)                (target)
      │                              │                                  │
-     │  1. Call Agent B             │                                  │
-     │     (protected agent)        │                                  │
+     │  1. POST /execute/B.func     │                                  │
+     │  Headers:                    │                                  │
+     │    X-Caller-DID              │                                  │
+     │    X-DID-Signature           │                                  │
+     │    X-DID-Timestamp           │                                  │
      │  ─────────────────────────►  │                                  │
      │                              │                                  │
-     │                              │  2. Is B protected?              │
-     │                              │     YES (tag: "admin")           │
+     │                              │  2. DID Auth Middleware:          │
+     │                              │     Verify Ed25519 signature     │
+     │                              │     Check replay protection      │
+     │                              │     Check timestamp window       │
      │                              │                                  │
-     │                              │  3. Has A→B approval?            │
+     │                              │  3. Is B in pending_approval?    │
+     │                              │     YES → 503 Unavailable        │
      │                              │                                  │
-     ├──────────────────────────────┼──────────────────────────────────┤
-     │           IF NO APPROVAL     │                                  │
-     ├──────────────────────────────┼──────────────────────────────────┤
+     │                              │  4. Tag Policy Evaluation:       │
+     │                              │     Load caller's AgentTagVC     │
+     │                              │     Verify VC signature          │
+     │                              │     Get caller tags from VC      │
+     │                              │     Get target tags              │
+     │                              │     Evaluate access policies:    │
+     │                              │       caller_tags match?         │
+     │                              │       target_tags match?         │
+     │                              │       function allowed?          │
+     │                              │       constraints satisfied?     │
      │                              │                                  │
-     │                              │  4. Create pending request       │
-     │                              │     (if not exists)              │
+     │                              │  5. If policy matched → decide   │
+     │                              │     If no policy → allow         │
+     │                              │     (backward compat)            │
      │                              │                                  │
-     │  5. Error: Permission        │                                  │
-     │     required, request        │                                  │
-     │     pending                  │                                  │
-     │  ◄─────────────────────────  │                                  │
+     │                              │  6. ALLOW → forward to B         │
+     │                              │  ───────────────────────────────►│
      │                              │                                  │
-     │                              │  6. Show in Admin UI             │
-     │                              │  ─────────────────────────────►  │
-     │                              │                                  │
-     ├──────────────────────────────┼──────────────────────────────────┤
-     │          IF APPROVED         │                                  │
-     ├──────────────────────────────┼──────────────────────────────────┤
-     │                              │                                  │
-     │                              │  4. Approval valid               │
-     │                              │     (not expired, not revoked)   │
-     │                              │                                  │
-     │  5. Call proceeds            │                                  │
-     │  ◄─────────────────────────  │                                  │
-     │                              │                                  │
+     │  7. Result                   │                                  │
+     │  ◄─────────────────────────  │  ◄──────────────────────────────│
 ```
 
 ### Flow 3: Revocation
@@ -145,41 +159,111 @@ Admin can revoke permissions at any time. Next call will fail.
      │  ◄─────────────────────────  │                                  │
 ```
 
+### Flow 4: Decentralized Verification
+
+Agents cache policies, revocation lists, and admin public keys locally. Verification happens without hitting the control plane on every call.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                       DECENTRALIZED VERIFICATION                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  AGENT B                     CONTROL PLANE
+  (target, verifying locally)
+     │                              │
+     │  1. On startup / every 5min  │
+     │  GET /api/v1/policies        │
+     │  ─────────────────────────►  │
+     │  ◄─────────────────────────  │  (cache policies)
+     │                              │
+     │  GET /api/v1/revocations     │
+     │  ─────────────────────────►  │
+     │  ◄─────────────────────────  │  (cache revoked DIDs)
+     │                              │
+     │  GET /api/v1/admin/public-key│
+     │  ─────────────────────────►  │
+     │  ◄─────────────────────────  │  (cache issuer public key)
+     │                              │
+     │                              │
+  AGENT A ──► AGENT B (direct call)
+     │  2. Incoming request         │
+     │     from Agent A             │
+     │                              │
+     │  3. Local verification:      │
+     │     - Check caller DID       │
+     │       not in revocation list │
+     │     - Verify Ed25519 sig     │
+     │       using cached pub key   │
+     │     - Evaluate policies      │
+     │       using cached rules     │
+     │     - Check constraints      │
+     │                              │
+     │  4. ALLOW/DENY locally       │
+     │     (no control plane call)  │
+```
+
 ---
 
 ## Core Concepts
 
 ### 1. Agent Identity (Tags)
 
-Agents propose tags at registration. Tags serve dual purposes: identity declaration and authorization scope. The control plane evaluates proposed tags against configurable approval rules.
+Agents propose tags at registration at both the agent level and per-skill/per-reasoner level. The control plane evaluates proposed tags against configurable approval rules.
 
 ```python
-# Python SDK
-app = Agent(
-    node_id="finance-bot",
-    tags=["finance", "reporting"]  # Proposed tags (sent as proposed_tags)
-)
+# Python SDK — per-skill tags
+app = Agent(node_id="finance-bot")
 
-@app.reasoner(tags=["pci-compliant"])  # Per-reasoner tags
-def process_payment():
+@app.reasoner(tags=["pci-compliant", "finance"])
+async def process_payment(input_data):
+    ...
+
+@app.skill(tags=["finance", "reporting"])
+async def get_balance(customer_id: str):
     ...
 ```
 
 ```go
-// Go SDK
+// Go SDK — per-reasoner tags
 agent.RegisterReasoner("payment", handler,
     agent.WithReasonerTags("pci-compliant", "finance"),
 )
 ```
 
+```typescript
+// TypeScript SDK — per-skill tags
+agent.registerReasoner("payment", handler, {
+    tags: ["pci-compliant", "finance"],
+});
+```
+
+**Tag Data Model:**
+
+Each `ReasonerDefinition` and `SkillDefinition` has three tag fields:
+
+| Field | Purpose |
+|-------|---------|
+| `tags` | Original tags declared by developer (backward compatibility) |
+| `proposed_tags` | Tags proposed for approval (copied from `tags` if not set) |
+| `approved_tags` | Tags granted by admin or auto-approval |
+
+Agent-level `proposed_tags` is the union of all per-skill/per-reasoner proposed tags (computed by `CollectAllProposedTags()`). Agent-level `approved_tags` is the union of all per-skill/per-reasoner approved tags.
+
 **Tag Lifecycle:**
 
 | Stage | Field | Description |
 |-------|-------|-------------|
-| Registration | `proposed_tags` | Tags the developer wants |
+| Registration | `proposed_tags` | Tags the developer wants (per skill/reasoner and agent level) |
 | Evaluation | Tag approval rules | Control plane checks each tag against rules |
 | Approved | `approved_tags` | Tags the admin (or auto-approval) grants |
-| Runtime | `CanonicalAgentTags()` | Prefers `approved_tags`, falls back to `tags` |
+| Runtime | `CanonicalAgentTags()` | Prefers `approved_tags`, falls back to `tags`; normalized, deduplicated |
+
+**Tag Normalization:**
+- All tags lowercased and trimmed
+- Empty strings filtered out
+- Duplicates removed
+- Case-insensitive comparison for rule matching
+- Deployment metadata tags excluded from canonical tags
 
 **Tag Approval Modes:**
 
@@ -187,16 +271,44 @@ agent.RegisterReasoner("payment", handler,
 |------|----------|
 | `auto` (default) | Tags auto-approved, agent proceeds immediately |
 | `manual` | Agent enters `pending_approval` state, waits for admin review |
-| `forbidden` | Registration rejected outright |
+| `forbidden` | Registration rejected outright (HTTP 403) |
 
 Tags serve as:
 - **Identity declaration** - "I am a finance agent"
 - **Capability advertisement** - "I handle PCI-compliant operations"
-- **Authorization scope** - Determines which policies apply (Phase 2)
+- **Authorization scope** - Determines which access policies apply
 - **Discovery metadata** - Other agents can find me by tags
 - **Admin context** - Helps admin decide whether to approve
 
-### 2. Dependency Declaration
+### 2. Agent Lifecycle States
+
+```go
+type AgentLifecycleStatus string
+
+const (
+    AgentStatusStarting        = "starting"          // Initializing
+    AgentStatusReady           = "ready"             // Fully operational
+    AgentStatusDegraded        = "degraded"          // Partial functionality
+    AgentStatusOffline         = "offline"           // Not responding
+    AgentStatusPendingApproval = "pending_approval"  // Awaiting tag approval
+)
+```
+
+**State Transitions:**
+
+| Current Status | Event | New Status |
+|----------------|-------|------------|
+| (new) | Registration, all tags auto-approved | `starting` |
+| (new) | Registration, some tags need manual review | `pending_approval` |
+| (new) | Registration, any forbidden tag | Registration rejected (403) |
+| `pending_approval` | Admin approves tags | `starting` |
+| `pending_approval` | Admin rejects tags | `offline` |
+| `starting` | Health check passes | `ready` |
+| `ready` | Health check fails | `offline` |
+
+Agents in `pending_approval` state cannot be called — the permission middleware returns HTTP 503 Unavailable.
+
+### 3. Dependency Declaration
 
 Agents declare the tags of agents they intend to call at registration. This creates permission requests proactively.
 
@@ -204,8 +316,8 @@ Agents declare the tags of agents they intend to call at registration. This crea
 # Python SDK
 app = Agent(
     node_id="reporting-bot",
-    tags=["reporting"],           # My identity
-    dependencies=["finance", "admin"]  # Tags I need to call
+    tags=["reporting"],                    # My identity
+    dependencies=["finance", "admin"]      # Tags I need to call
 )
 ```
 
@@ -219,60 +331,155 @@ This enables:
 - **Bulk approval** - Admin can approve multiple dependencies at once
 - **Visibility** - See all required permissions for an agent upfront
 
-### 3. Protected Agents
+### 4. Protected Agents
 
-Protected agents are defined via **config file**. These rules determine which agents require permission to call.
+Protected agents are defined via **config file** (seeded at startup) and **Admin UI** (stored in database). These rules determine which agents require explicit permission to call.
 
 ```yaml
 # agentfield.yaml
-permissions:
-  enabled: true
-  protected_agents:
-    # By exact tag
-    - pattern_type: tag
-      pattern: admin
-      description: "Agents with admin tag require permission"
-
-    # By tag pattern (wildcard)
-    - pattern_type: tag_pattern
-      pattern: "finance*"
-      description: "All finance-related agents require permission"
-
-    # By specific agent ID
-    - pattern_type: agent_id
-      pattern: "payment-gateway"
-      description: "Specific agent requires permission"
+features:
+  did:
+    authorization:
+      tag_approval_rules:
+        default_mode: "auto"
+        rules:
+          - tags: ["sensitive", "financial", "payments"]
+            approval: "manual"
+            reason: "Sensitive/financial tags require admin review"
+          - tags: ["public", "analytics"]
+            approval: "auto"
+            reason: "Auto-approved"
 ```
 
-Rules can also be added via Admin UI (stored in database), but config file is the primary source.
+**Note:** The legacy `protected_agents` configuration has been removed. Authorization is now solely handled by tag approval rules and access policies.
 
-**Pattern Types:**
-| Type | Example | Matches |
-|------|---------|---------|
-| `tag` | `admin` | Agents with exact tag "admin" |
-| `tag_pattern` | `finance*` | Agents with tags starting with "finance" |
-| `agent_id` | `payment-gateway` | Specific agent by ID |
+### 5. Access Policies (Policy Engine)
 
-### 4. Permission Approval
+Access policies define tag-based authorization rules for cross-agent calls. They support function-level allow/deny lists and parameter constraints.
 
-When Agent A tries to call protected Agent B:
+```yaml
+# agentfield.yaml
+features:
+  did:
+    authorization:
+      access_policies:
+        - name: finance_to_billing
+          caller_tags: ["finance"]
+          target_tags: ["billing"]
+          allow_functions: ["charge_*", "refund_*", "get_*"]
+          deny_functions: ["delete_*", "admin_*"]
+          constraints:
+            amount:
+              operator: "<="
+              value: 10000
+          action: allow
+          priority: 10
 
-1. Control plane checks if B matches any protected agent rule
-2. If protected, checks if approval exists for (A's DID, B's DID)
-3. If no approval, creates pending request and returns error
-4. Admin sees request in UI and can approve/reject
-5. Upon approval, control plane stores approval record
-6. Future calls from A to B succeed (same DID pair)
+        - name: support_readonly
+          caller_tags: ["support"]
+          target_tags: ["customer-data"]
+          allow_functions: ["get_*", "query_*"]
+          action: allow
+          priority: 5
+```
 
-**Revocation:** Admin can revoke permissions at any time. When revoked:
-- The approval status changes to "revoked"
-- A `revoked_at` timestamp is recorded
-- All subsequent calls are rejected
-- Agent must request permission again (new approval needed)
+**Policy Fields:**
 
-### 5. Verifiable Credentials (VCs)
+| Field | Description |
+|-------|-------------|
+| `name` | Unique policy name |
+| `caller_tags` | Tags the calling agent must have (empty = any) |
+| `target_tags` | Tags the target agent must have (empty = any) |
+| `allow_functions` | Whitelist of callable functions (supports wildcards) |
+| `deny_functions` | Blacklist of functions (checked first, overrides allow) |
+| `constraints` | Parameter-level constraints (e.g., `amount <= 10000`) |
+| `action` | `"allow"` or `"deny"` — the decision when all conditions match |
+| `priority` | Higher priority policies evaluated first |
+| `enabled` | Toggle without deletion |
 
-Upon approval, the system can issue a PermissionVC - a cryptographically signed proof of the approval:
+**Evaluation Algorithm (first-match-wins):**
+
+1. Policies sorted by `priority DESC, id ASC` (deterministic ordering)
+2. For each enabled policy:
+   - Check caller tags match (empty policy tags = wildcard)
+   - Check target tags match
+   - Check deny functions — if matched, **immediately deny**
+   - Check allow functions — if list exists but function not in it, skip policy
+   - Evaluate constraints — missing parameters or violations cause deny (fail-closed)
+   - All checks pass → return `Allowed = (action == "allow")`
+3. No matching policy → return `Matched: false` (request allowed for backward compatibility)
+
+**Constraint Operators:** `<=`, `>=`, `<`, `>`, `==`, `!=`
+- Numeric comparison for numeric values
+- String comparison (`==`/`!=`) as fallback
+- Missing parameters in input → deny (fail-closed)
+
+**Policy Evaluation Result:**
+
+```go
+type PolicyEvaluationResult struct {
+    Allowed    bool   // Whether access is granted
+    Matched    bool   // Whether any policy matched
+    PolicyName string // Which policy matched
+    PolicyID   int64
+    Reason     string // Human-readable explanation
+}
+```
+
+### 6. Verifiable Credentials (VCs)
+
+The system uses two types of VCs:
+
+#### AgentTagVC (Primary — Per-Agent)
+
+Issued when admin approves an agent's tags. Certifies which tags an agent is authorized to hold. Signed with Ed25519 by the control plane issuer DID.
+
+```json
+{
+  "@context": ["https://www.w3.org/2018/credentials/v1"],
+  "type": ["VerifiableCredential", "AgentTagCredential"],
+  "id": "urn:agentfield:agent-tag-vc:550e8400-e29b-41d4-a716-446655440000",
+  "issuer": "did:web:localhost%3A8080:agents:control-plane",
+  "issuanceDate": "2026-02-08T10:30:00Z",
+  "credentialSubject": {
+    "id": "did:web:localhost%3A8080:agents:finance-bot",
+    "agent_id": "finance-bot",
+    "permissions": {
+      "tags": ["finance", "payment"],
+      "allowed_callees": ["*"]
+    },
+    "approved_by": "admin",
+    "approved_at": "2026-02-08T10:30:00Z"
+  },
+  "proof": {
+    "type": "Ed25519Signature2020",
+    "created": "2026-02-08T10:30:00Z",
+    "verificationMethod": "did:web:localhost%3A8080:agents:control-plane#key-1",
+    "proofPurpose": "assertionMethod",
+    "proofValue": "s6mNf...XkMg=="
+  }
+}
+```
+
+**Key fields:**
+- `credentialSubject.id` — Agent's DID (cryptographic identity)
+- `credentialSubject.permissions.tags` — Approved tags (what the agent is authorized to claim)
+- `credentialSubject.permissions.allowed_callees` — `["*"]` means policy engine decides
+- `proof` — Ed25519 signature from control plane issuer; falls back to `UnsignedAuditRecord` if issuer DID unavailable
+
+**Verification at call time (`TagVCVerifier`):**
+1. Load VC record from storage
+2. Check revocation (`revoked_at` timestamp)
+3. Check expiration (`expires_at` timestamp)
+4. Parse VC document from JSON
+5. Verify Ed25519 signature against issuer public key
+6. Validate subject binding (VC agent ID matches requested agent)
+
+If VC verification succeeds, the permission middleware uses **VC-verified tags** (cryptographic proof). If VC exists but verification fails (revoked/expired/invalid), the middleware uses **empty tags** (fail-closed security — no fallback to unverified tags).
+
+#### PermissionVC (Legacy — Per Caller-Target Pair)
+
+Issued when admin approves a specific caller→target permission. Still supported for backward compatibility.
 
 ```json
 {
@@ -282,9 +489,17 @@ Upon approval, the system can issue a PermissionVC - a cryptographically signed 
   "issuanceDate": "2026-02-04T12:00:00Z",
   "expirationDate": "2026-03-06T12:00:00Z",
   "credentialSubject": {
-    "caller": "did:web:agentfield.example.com:agents:agent-a",
-    "target": "did:web:agentfield.example.com:agents:agent-b",
-    "permission": "call"
+    "caller": {
+      "did": "did:web:agentfield.example.com:agents:agent-a",
+      "agent_id": "agent-a"
+    },
+    "target": {
+      "did": "did:web:agentfield.example.com:agents:agent-b",
+      "agent_id": "agent-b"
+    },
+    "permission": "call",
+    "approved_by": "admin",
+    "approved_at": "2026-02-04T12:00:00Z"
   },
   "proof": {
     "type": "Ed25519Signature2020",
@@ -296,18 +511,67 @@ Upon approval, the system can issue a PermissionVC - a cryptographically signed 
 }
 ```
 
-### 6. DID Methods
+**VC Model Comparison:**
 
-#### did:key (Current - Limited)
-- DID derived from public key: `did:key:z6MkpTHR8VNs...`
-- Self-contained, no external resolution
-- **Cannot be revoked** - only time-based expiry
+| Aspect | AgentTagVC (New) | PermissionVC (Legacy) |
+|--------|------------------|-----------------------|
+| Granularity | Per agent | Per (caller, target) pair |
+| What's certified | Approved tags | Direct permission to call target |
+| Authorization method | Policy-based tag matching | Explicit approval lookup |
+| Scalability | O(n) agents + policy rules | O(n²) with agent count |
+| Issued when | Admin approves tags | Admin approves caller→target pair |
 
-#### did:web (New - Full Support)
+### 7. DID Methods
+
+#### did:web (Primary)
 - DID resolves to URL: `did:web:agentfield.example.com:agents:agent-a`
 - Control plane hosts DID document at that URL
-- **Real-time revocation** - return 404 or revoked status
+- **Real-time revocation** — return 404 or revoked status
 - Verifiers fetch fresh public key on each verification
+- Domain configurable via `features.did.authorization.domain`
+
+#### did:key (Supported)
+- DID derived from public key: `did:key:z6MkpTHR8VNs...`
+- Self-contained, no external resolution
+- **Cannot be revoked** — only time-based expiry
+
+### 8. Decentralized Verification
+
+Agents can verify authorization locally without hitting the control plane on every call. All three SDKs (Python, Go, TypeScript) implement a `LocalVerifier` that caches:
+
+- **Access policies** — fetched from `GET /api/v1/policies`
+- **Revocation list** — fetched from `GET /api/v1/revocations`
+- **Admin public key** — fetched from `GET /api/v1/admin/public-key`
+
+**Cache refresh:** Every 5 minutes (configurable via `refresh_interval`).
+
+**Local verification steps:**
+1. Check caller DID not in revocation list
+2. Validate timestamp within window (default 300 seconds)
+3. Verify Ed25519 signature using cached admin public key
+4. Evaluate policies locally using cached rules
+5. Check parameter constraints
+
+**Opt-out per function:** Functions marked with `require_realtime_validation=True` bypass local verification and forward to the control plane.
+
+```python
+# Python SDK
+@app.reasoner(require_realtime_validation=True)
+async def high_security_operation(input_data):
+    ...
+```
+
+```typescript
+// TypeScript SDK
+agent.registerReasoner("sensitive_op", handler, {
+    requireRealtimeValidation: true,
+});
+```
+
+**Fail-closed behavior:**
+- No policies cached → deny access
+- Tag VC signature verification fails → use empty tags (deny unless explicit allow-all policy)
+- Control plane unreachable → use stale cache (controlled degradation)
 
 ---
 
@@ -317,18 +581,36 @@ Upon approval, the system can issue a PermissionVC - a cryptographically signed 
 
 | Entity | Trust Level | Rationale |
 |--------|-------------|-----------|
-| Control Plane | Full | Central authority, hosts DIDs, issues VCs |
-| Admin | Full | Makes approval decisions |
-| Agent's Private Key | Cryptographic | Proves DID ownership via signatures |
+| Control Plane | Full | Central authority, hosts DIDs, issues VCs, enforces policies |
+| Admin | Full | Approves/rejects tags, defines policies, manages protected agents |
+| Agent's Private Key | Cryptographic | Proves DID ownership via Ed25519 signatures |
 
 ### What We Don't Trust
 
 | Entity | Protection Mechanism |
 |--------|---------------------|
-| Developers claiming tags | Tags are identity only, not permissions |
-| Agents spoofing DIDs | DID ownership proven via cryptographic signature |
-| Forged VCs | VC signature verified against issuer's public key |
-| Expired approvals | Expiration checked on each call |
+| Developers proposing tags | Tags are *proposed*, not active until admin approves |
+| Agents spoofing DIDs | DID ownership proven via Ed25519 cryptographic signature |
+| Forged AgentTagVCs | VC signature verified against control plane issuer's public key |
+| Modified VCs | Any modification breaks Ed25519 signature → rejected |
+| Expired approvals | Expiration checked on each call (both VC and approval) |
+| Replay attacks | Timestamp window + in-memory signature cache with TTL |
+
+### Two-Step Authorization
+
+**Step 1: Tag Assignment (Admin Approval)**
+- **Question:** Does this agent deserve these tags?
+- **Who decides:** Admin (or auto-approval rules)
+- **When:** At registration time
+- **Result:** AgentTagVC with approved tags, signed by control plane
+
+**Step 2: Function Call (Policy Evaluation)**
+- **Question:** Can caller's tags call target's function with these parameters?
+- **Who decides:** Policy engine (automated, based on admin-defined policies)
+- **When:** Every function call
+- **Result:** Allow or deny based on tag-matching policies + parameter constraints
+
+Both steps must pass for access to work.
 
 ### Security Boundaries
 
@@ -338,32 +620,36 @@ Upon approval, the system can issue a PermissionVC - a cryptographically signed 
 │                                                                 │
 │  - Issues DIDs (did:web)                                       │
 │  - Hosts DID documents (enables revocation)                    │
+│  - Evaluates tag approval rules                                │
+│  - Issues signed AgentTagVCs (Ed25519)                         │
+│  - Evaluates access policies at call time                      │
 │  - Stores approval records (source of truth)                   │
-│  - Issues PermissionVCs (signed credentials)                   │
-│  - Enforces permission checks on execution                     │
+│  - Publishes policies, revocations, public keys for caching    │
 └─────────────────────────────────────────────────────────────────┘
                               │
-                              │ Approval required
+                              │ Admin controls
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  TRUST BOUNDARY: Admin Approval                                 │
+│  TRUST BOUNDARY: Admin                                          │
 │                                                                 │
-│  - Reviews permission requests                                  │
-│  - Approves/rejects with duration                              │
-│  - Can revoke at any time                                      │
+│  - Configures tag approval rules (auto/manual/forbidden)       │
+│  - Reviews and approves/rejects proposed tags                  │
+│  - Defines access policies (caller_tags → target_tags)         │
 │  - Configures protected agent rules                            │
+│  - Can revoke permissions and tags at any time                 │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               │ Credentials issued
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  AGENT BOUNDARY: Self-Declared Identity                         │
+│  AGENT BOUNDARY: Proposed Identity                              │
 │                                                                 │
-│  - Agents assign their own tags (informational, no approval)   │
-│  - Tags = identity, NOT permissions                            │
-│  - Agents declare dependencies (tags they intend to call)      │
-│  - Agents cannot grant themselves access to protected agents   │
+│  - Agents propose tags (not active until approved)             │
+│  - Tags can be per-skill/per-reasoner                          │
+│  - Agents cannot grant themselves access                       │
 │  - Must request and wait for admin approval                    │
+│  - Can cache policies for local verification                   │
+│  - Can opt functions into realtime validation                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -371,45 +657,75 @@ Upon approval, the system can issue a PermissionVC - a cryptographically signed 
 
 ## API Contracts
 
-### Agent Registration (with Dependencies)
-
-When an agent registers, it can declare dependencies - tags of agents it intends to call.
+### Agent Registration
 
 ```http
-POST /api/v1/agents/register
+POST /api/v1/nodes/register
 Content-Type: application/json
 
 {
-  "agent_id": "reporting-bot",
-  "tags": ["reporting", "analytics"],     // Agent's own identity (informational)
-  "dependencies": ["finance", "admin"]    // Tags this agent needs to call
-}
-
-Response 200:
-{
-  "agent_id": "reporting-bot",
-  "did": "did:web:example.com:agents:reporting-bot",
-  "tags": ["reporting", "analytics"],
-  "pending_permissions": [
+  "id": "finance-bot",
+  "team_id": "default",
+  "base_url": "http://localhost:9001",
+  "reasoners": [
     {
-      "target_tag": "finance",
-      "status": "pending",
-      "request_id": 124
-    },
+      "id": "process_payment",
+      "tags": ["finance", "pci-compliant"],
+      "proposed_tags": ["finance", "pci-compliant"],
+      "input_schema": {}
+    }
+  ],
+  "skills": [
     {
-      "target_tag": "admin",
-      "status": "pending",
-      "request_id": 125
+      "id": "get_balance",
+      "tags": ["finance"],
+      "proposed_tags": ["finance"],
+      "input_schema": {}
     }
   ]
 }
 ```
 
-The control plane:
-1. Creates a did:web for the agent
-2. Stores agent's tags (informational)
-3. For each dependency that matches a protected agent rule, creates a pending permission request
-4. Returns list of pending permissions so agent knows what's awaiting approval
+**Response (all tags auto-approved):**
+```json
+{
+  "success": true,
+  "message": "Node registered",
+  "node_id": "finance-bot"
+}
+```
+
+**Response (some tags need manual review):**
+```json
+{
+  "success": true,
+  "message": "Node registered but awaiting tag approval",
+  "node_id": "finance-bot",
+  "status": "pending_approval",
+  "proposed_tags": ["finance", "pci-compliant"],
+  "pending_tags": ["finance"],
+  "auto_approved_tags": ["pci-compliant"]
+}
+```
+
+**Response (forbidden tag):**
+```json
+HTTP 403
+{
+  "error": "forbidden_tags",
+  "message": "Registration rejected: tags [root] are forbidden",
+  "forbidden_tags": ["root"]
+}
+```
+
+**Registration flow:**
+1. Parse registration, normalize tags (`proposed_tags` ↔ `tags` bidirectional sync)
+2. Evaluate tag approval rules if service enabled
+3. If any forbidden tags → reject with HTTP 403
+4. If any manual tags → set lifecycle status to `pending_approval`
+5. If all auto → set lifecycle status to `starting`, set approved_tags immediately
+6. Create did:web document for the agent
+7. Store agent in database
 
 ### Permission Request Flow
 
@@ -421,6 +737,8 @@ Content-Type: application/json
 {
   "caller_did": "did:web:example.com:agents:agent-a",
   "target_did": "did:web:example.com:agents:agent-b",
+  "caller_agent_id": "agent-a",
+  "target_agent_id": "agent-b",
   "reason": "Need to access admin functions"
 }
 
@@ -459,7 +777,7 @@ Response 200 (not protected):
 }
 ```
 
-### Admin Endpoints
+### Admin Endpoints — Permission Management
 
 #### List Pending Requests
 ```http
@@ -475,6 +793,7 @@ Response 200:
       "target_did": "did:web:example.com:agents:agent-b",
       "target_agent_id": "agent-b",
       "status": "pending",
+      "effective_status": "pending",
       "created_at": "2026-02-04T12:00:00Z"
     }
   ]
@@ -483,11 +802,11 @@ Response 200:
 
 #### Approve Permission
 ```http
-POST /api/v1/admin/permissions/123/approve
+POST /api/v1/admin/permissions/:id/approve
 Content-Type: application/json
 
 {
-  "duration_hours": 720,  // 30 days, null = permanent
+  "duration_hours": 720,
   "reason": "Approved for Q1 project"
 }
 
@@ -503,7 +822,7 @@ Response 200:
 
 #### Revoke Permission
 ```http
-POST /api/v1/admin/permissions/123/revoke
+POST /api/v1/admin/permissions/:id/revoke
 Content-Type: application/json
 
 {
@@ -518,7 +837,7 @@ Response 200:
 }
 ```
 
-### Tag Approval Admin Endpoints
+### Admin Endpoints — Tag Approval
 
 #### List Pending Agents
 ```http
@@ -530,7 +849,7 @@ Response 200:
     {
       "agent_id": "finance-bot",
       "proposed_tags": ["finance", "reporting", "admin"],
-      "approved_tags": ["finance", "reporting"],
+      "approved_tags": [],
       "status": "pending_approval",
       "registered_at": "2026-02-08T12:00:00Z"
     }
@@ -539,9 +858,9 @@ Response 200:
 }
 ```
 
-#### Approve Agent Tags
+#### Approve Agent Tags (Agent-Level)
 ```http
-POST /api/v1/admin/agents/finance-bot/approve-tags
+POST /api/v1/admin/agents/:agent_id/approve-tags
 Content-Type: application/json
 
 {
@@ -560,21 +879,27 @@ Response 200:
 
 #### Approve Tags Per Skill/Reasoner
 ```http
-POST /api/v1/admin/agents/finance-bot/approve-tags
+POST /api/v1/admin/agents/:agent_id/approve-tags
 Content-Type: application/json
 
 {
   "approved_tags": ["finance"],
+  "skill_tags": {
+    "get_balance": ["finance"],
+    "charge_customer": ["finance", "pci-compliant"]
+  },
   "reasoner_tags": {
-    "payment-processor": ["finance", "pci-compliant"],
-    "report-generator": ["reporting"]
-  }
+    "process_payment": ["finance", "pci-compliant"]
+  },
+  "reason": "Per-skill approval with different tag scopes"
 }
 ```
 
+When `skill_tags` or `reasoner_tags` are provided, approval is per-skill/per-reasoner. Each skill/reasoner gets only its specified tags. The agent-level `approved_tags` becomes the union of all per-skill/per-reasoner approved tags.
+
 #### Reject Agent Tags
 ```http
-POST /api/v1/admin/agents/finance-bot/reject-tags
+POST /api/v1/admin/agents/:agent_id/reject-tags
 Content-Type: application/json
 
 {
@@ -589,10 +914,114 @@ Response 200:
 }
 ```
 
+Rejection moves the agent to `offline` status.
+
+### Admin Endpoints — Access Policies
+
+#### List Policies
+```http
+GET /api/v1/admin/policies
+
+Response 200:
+{
+  "policies": [
+    {
+      "id": 1,
+      "name": "finance_to_billing",
+      "caller_tags": ["finance"],
+      "target_tags": ["billing"],
+      "allow_functions": ["charge_*", "refund_*"],
+      "deny_functions": ["delete_*"],
+      "constraints": {
+        "amount": {"operator": "<=", "value": 10000}
+      },
+      "action": "allow",
+      "priority": 10,
+      "enabled": true,
+      "description": "Finance agents can call billing functions"
+    }
+  ],
+  "total": 1
+}
+```
+
+#### Create Policy
+```http
+POST /api/v1/admin/policies
+Content-Type: application/json
+
+{
+  "name": "finance_to_billing",
+  "caller_tags": ["finance"],
+  "target_tags": ["billing"],
+  "allow_functions": ["charge_*", "refund_*"],
+  "deny_functions": ["delete_*"],
+  "constraints": {
+    "amount": {"operator": "<=", "value": 10000}
+  },
+  "action": "allow",
+  "priority": 10,
+  "description": "Finance agents can call billing functions"
+}
+
+Response 201: (created AccessPolicy object)
+```
+
+#### Get / Update / Delete Policy
+```http
+GET    /api/v1/admin/policies/:id
+PUT    /api/v1/admin/policies/:id
+DELETE /api/v1/admin/policies/:id
+```
+
+### Agent-Facing Endpoints (Decentralized Verification)
+
+#### Fetch Policies (for local caching)
+```http
+GET /api/v1/policies
+
+Response 200:
+{
+  "policies": [...],
+  "total": 5,
+  "fetched_at": "2026-02-08T12:00:00Z"
+}
+```
+
+#### Fetch Revocation List (for local caching)
+```http
+GET /api/v1/revocations
+
+Response 200:
+{
+  "revoked_dids": [
+    "did:web:example.com:agents:compromised-agent"
+  ],
+  "total": 1,
+  "fetched_at": "2026-02-08T12:00:00Z"
+}
+```
+
+#### Fetch Admin Public Key (for local VC verification)
+```http
+GET /api/v1/admin/public-key
+
+Response 200:
+{
+  "issuer_did": "did:web:localhost%3A8080:agents:control-plane",
+  "public_key_jwk": {
+    "kty": "OKP",
+    "crv": "Ed25519",
+    "x": "base64url_encoded_32_byte_key"
+  },
+  "fetched_at": "2026-02-08T12:00:00Z"
+}
+```
+
 ### DID Resolution (did:web)
 
 ```http
-GET /agents/agent-a/did.json
+GET /agents/:agent_id/did.json
 
 Response 200 (active):
 {
@@ -626,12 +1055,14 @@ Response 404 (revoked):
 
 | Data | Source | Purpose |
 |------|--------|---------|
-| **Protected agent rules** | Config file (primary) | Defines which agents require permission |
-| **Protected agent rules** | Database (secondary) | Rules added via Admin UI |
+| **Protected agent rules** | Config file (seeded at startup) | Defines which agents require permission |
+| **Protected agent rules** | Database (via Admin API) | Rules added at runtime |
 | **Tag approval rules** | Config file | Controls which tags need manual approval |
-| **Permission approvals** | Database | Tracks caller→target approval status |
+| **Access policies** | Config file + Database (Admin API) | Tag-based authorization rules |
+| **Permission approvals** | Database | Tracks caller→target DID-pair approval status |
+| **Agent Tag VCs** | Database | Stores signed VCs certifying agent tags |
 | **DID documents** | Database | Stores did:web documents for resolution |
-| **Agent proposed_tags** | Agent registration | Tags the developer requests |
+| **Agent proposed_tags** | Agent registration | Tags the developer proposes (per skill/reasoner) |
 | **Agent approved_tags** | Admin approval / auto | Tags granted after evaluation |
 | **Agent dependencies** | Agent registration | Tags the agent intends to call |
 
@@ -639,68 +1070,94 @@ Response 404 (revoked):
 
 ```yaml
 # agentfield.yaml
+features:
+  did:
+    authorization:
+      # Enable/disable the authorization system
+      enabled: true
 
-permissions:
-  # Enable/disable the permission system
-  enabled: true
+      # Enable DID-based authentication on API routes
+      did_auth_enabled: true
 
-  # Domain for did:web DIDs
-  did_web_domain: "agentfield.example.com"
+      # Domain for did:web identifiers
+      domain: "agentfield.example.com"
 
-  # Default approval duration (hours), null = permanent
-  default_duration_hours: 720  # 30 days
+      # Allowed time drift for DID signature timestamps (seconds)
+      timestamp_window_seconds: 300
 
-  # Auto-request permission when call is denied
-  auto_request_on_deny: true
+      # Default duration for permission approvals (hours)
+      default_approval_duration_hours: 720  # 30 days
 
-  # Protected agent rules
-  protected_agents:
-    # By tag (exact match)
-    - pattern_type: tag
-      pattern: admin
-      description: "Admin-tagged agents require permission"
+      # Separate token for admin operations (tag approval, policy management)
+      admin_token: "admin-secret-token"
 
-    # By tag pattern (wildcard)
-    - pattern_type: tag_pattern
-      pattern: "finance*"
-      description: "Finance agents require permission"
+      # Token sent to agents during request forwarding
+      # (agents with RequireOriginAuth validate this)
+      internal_token: "internal-secret-token"
 
-    # By agent ID (specific agent)
-    - pattern_type: agent_id
-      pattern: "payment-gateway"
-      description: "Payment gateway requires permission"
+      # Tag approval rules
+      tag_approval_rules:
+        default_mode: auto  # "auto" | "manual" | "forbidden"
+        rules:
+          - tags: ["admin", "superuser"]
+            approval: manual
+            reason: "Admin-level tags require review"
+          - tags: ["dangerous", "root"]
+            approval: forbidden
+            reason: "These tags are not allowed"
+          - tags: ["internal", "beta"]
+            approval: auto
+            reason: "Safe tags, no special privileges"
 
-  # Tag approval rules (controls which tags require admin review)
-  tag_approval_rules:
-    # Default mode for tags not matching any rule: auto | manual | forbidden
-    default_mode: auto  # "auto" = zero-disruption default
-    rules:
-      - tags: ["admin", "superuser"]
-        approval: manual
-        reason: "Admin-level tags require review"
-      - tags: ["dangerous", "root"]
-        approval: forbidden
-        reason: "These tags are not allowed"
+      # Access policies (seeded at startup, also manageable via Admin API)
+      access_policies:
+        - name: finance_to_billing
+          caller_tags: ["finance"]
+          target_tags: ["billing"]
+          allow_functions: ["charge_*", "refund_*", "get_*"]
+          deny_functions: ["delete_*", "admin_*"]
+          constraints:
+            amount:
+              operator: "<="
+              value: 10000
+          action: allow
+          priority: 10
+        - name: support_readonly
+          caller_tags: ["support"]
+          target_tags: ["customer-data"]
+          allow_functions: ["get_*", "query_*"]
+          action: allow
+          priority: 5
 ```
 
 ### Environment Variables
 
 ```bash
-# Enable permissions
-AGENTFIELD_PERMISSIONS_ENABLED=true
+# Enable authorization
+AGENTFIELD_AUTHORIZATION_ENABLED=true
 
-# did:web domain
-AGENTFIELD_PERMISSIONS_DID_WEB_DOMAIN=agentfield.example.com
+# Enable DID-based authentication on API routes
+AGENTFIELD_AUTHORIZATION_DID_AUTH_ENABLED=true
 
-# Default duration
-AGENTFIELD_PERMISSIONS_DEFAULT_DURATION_HOURS=720
+# Domain for did:web identifiers
+AGENTFIELD_AUTHORIZATION_DOMAIN=agentfield.example.com
+
+# Separate token for admin operations
+AGENTFIELD_AUTHORIZATION_ADMIN_TOKEN=admin-secret-token
+
+# Token sent to agents during request forwarding
+AGENTFIELD_AUTHORIZATION_INTERNAL_TOKEN=internal-secret-token
 ```
+
+Environment variables take precedence over YAML config values.
 
 ---
 
 ## Database Schema
 
 ### permission_approvals
+Tracks caller→target DID-pair permission requests and approvals.
+
 ```sql
 CREATE TABLE permission_approvals (
     id              BIGSERIAL PRIMARY KEY,
@@ -711,16 +1168,22 @@ CREATE TABLE permission_approvals (
     status          TEXT NOT NULL DEFAULT 'pending',
     approved_by     TEXT,
     approved_at     TIMESTAMP WITH TIME ZONE,
+    rejected_by     TEXT,
+    rejected_at     TIMESTAMP WITH TIME ZONE,
+    revoked_by      TEXT,
     revoked_at      TIMESTAMP WITH TIME ZONE,
     expires_at      TIMESTAMP WITH TIME ZONE,
     reason          TEXT,
     created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
 
     CONSTRAINT unique_caller_target UNIQUE (caller_did, target_did)
 );
 ```
 
 ### did_documents
+Stores DID documents for did:web resolution.
+
 ```sql
 CREATE TABLE did_documents (
     did             TEXT PRIMARY KEY,
@@ -728,22 +1191,128 @@ CREATE TABLE did_documents (
     did_document    JSONB NOT NULL,
     public_key_jwk  TEXT NOT NULL,
     revoked_at      TIMESTAMP WITH TIME ZONE,
-    created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 ```
 
 ### protected_agents_config
+Stores protected agent rules (from config and Admin UI).
+
 ```sql
 CREATE TABLE protected_agents_config (
     id              BIGSERIAL PRIMARY KEY,
     pattern_type    TEXT NOT NULL,
     pattern         TEXT NOT NULL,
     description     TEXT,
+    enabled         BOOLEAN NOT NULL DEFAULT TRUE,
     created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
 
     CONSTRAINT unique_pattern UNIQUE (pattern_type, pattern)
 );
 ```
+
+### access_policies
+Stores tag-based authorization policies.
+
+```sql
+CREATE TABLE access_policies (
+    id              BIGSERIAL PRIMARY KEY,
+    name            TEXT NOT NULL UNIQUE,
+    caller_tags     TEXT NOT NULL,          -- JSON array
+    target_tags     TEXT NOT NULL,          -- JSON array
+    allow_functions TEXT,                   -- JSON array
+    deny_functions  TEXT,                   -- JSON array
+    constraints     TEXT,                   -- JSON object {param: {operator, value}}
+    action          TEXT NOT NULL DEFAULT 'allow',
+    priority        INTEGER NOT NULL DEFAULT 0,
+    enabled         BOOLEAN NOT NULL DEFAULT TRUE,
+    description     TEXT,
+    created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+```
+
+### agent_tag_vcs
+Stores signed Agent Tag VCs issued upon tag approval.
+
+```sql
+CREATE TABLE agent_tag_vcs (
+    id              BIGSERIAL PRIMARY KEY,
+    agent_id        TEXT NOT NULL UNIQUE,
+    agent_did       TEXT NOT NULL,
+    vc_id           TEXT NOT NULL UNIQUE,
+    vc_document     TEXT NOT NULL,          -- Full W3C VC JSON
+    signature       TEXT,                   -- Ed25519 signature
+    issued_at       TIMESTAMP WITH TIME ZONE NOT NULL,
+    expires_at      TIMESTAMP WITH TIME ZONE,
+    revoked_at      TIMESTAMP WITH TIME ZONE,
+    created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+```
+
+---
+
+## Middleware Architecture
+
+### Request Processing Pipeline
+
+```
+Incoming Request
+    │
+    ▼
+┌──────────────────────────┐
+│  DID Auth Middleware       │
+│  - Extract X-Caller-DID   │
+│  - Verify Ed25519 sig     │
+│  - Check timestamp window  │
+│  - Replay protection       │
+│  - Store verified DID      │
+│    in request context      │
+└──────────────────────────┘
+    │
+    ▼
+┌──────────────────────────┐
+│  Permission Middleware     │
+│                            │
+│  1. Target in pending_     │
+│     approval? → 503        │
+│                            │
+│  2. LAYER 1: Tag Policy    │
+│     - Load caller's        │
+│       AgentTagVC            │
+│     - Verify VC signature  │
+│     - Get tags from VC     │
+│     - EvaluateAccess()     │
+│     - Policy matched?      │
+│       YES → allow/deny     │
+│                            │
+│  3. No policy matched:     │
+│     Allow (backward compat)│
+└──────────────────────────┘
+    │
+    ▼
+┌──────────────────────────┐
+│  Execute Handler           │
+│  - Forward to target agent │
+│  - Include X-Caller-DID    │
+│    and X-Target-DID headers│
+└──────────────────────────┘
+```
+
+### DID Auth Headers
+
+| Header | Description |
+|--------|-------------|
+| `X-Caller-DID` | Agent's DID (e.g., `did:web:example.com:agents:agent-a`) |
+| `X-DID-Signature` | Base64-encoded Ed25519 signature |
+| `X-DID-Timestamp` | ISO 8601 timestamp of signing |
+
+**Signature payload:** `{timestamp}:{SHA256(request_body)}`
+
+**Replay protection:** In-memory signature cache with TTL matching the timestamp window. SHA256 hash of decoded signature is tracked.
 
 ---
 
@@ -757,21 +1326,37 @@ The VC authorization system is **additive**. Existing API key authentication con
 - Super keys (`scopes: ["*"]`) bypass permission checks entirely
 - Scoped keys still enforce tag-based access control
 
+### Default Mode is Zero-Disruption
+
+- `tag_approval_rules.default_mode: auto` — all tags auto-approved when no rules configured
+- If no access policies are defined, the policy engine returns `Matched: false` and the request is allowed
+- If authorization is disabled (`enabled: false`), all middleware is skipped
+- `proposed_tags` ↔ `tags` bidirectional sync ensures old SDKs work seamlessly
+
+### Two-Layer Permission Check
+
+The permission middleware evaluates tag-based access policies:
+1. If a policy matches, it decides (allow or deny)
+2. If no policy matches, the request is allowed (backward compatible for untagged agents)
+
 ### Migration Path
 
-1. **Phase 1:** Deploy with `permissions.enabled: false` (default)
-2. **Phase 2:** Enable permissions, configure protected agents
-3. **Phase 3:** Monitor permission requests, train admins on approval workflow
-4. **Phase 4:** Gradually expand protected agent rules
+1. **Phase 1:** Deploy with `authorization.enabled: false` (default)
+2. **Phase 2:** Enable authorization, configure tag approval rules
+3. **Phase 3:** Define access policies for tag-based authorization
+4. **Phase 4:** Monitor policy evaluation results, tune policies
+5. **Phase 5:** Enable decentralized verification in SDKs for performance
 
-### Coexistence Rules
+### Authorization Rules
 
 | Scenario | Behavior |
 |----------|----------|
-| Super API key + protected agent | Allowed (super key bypasses) |
-| Scoped API key + protected agent | Permission check required |
-| No API key + protected agent | Permission check required |
-| Any key + unprotected agent | Normal access control |
+| Super API key | Allowed (super key bypasses all checks) |
+| Agent in pending_approval | 503 Unavailable |
+| Policy match → allow | Access granted |
+| Policy match → deny | 403 Forbidden |
+| No policy match | Allowed (backward compatible) |
+| Authorization disabled | All middleware skipped |
 
 ---
 
@@ -779,14 +1364,18 @@ The VC authorization system is **additive**. Existing API key authentication con
 
 | Term | Definition |
 |------|------------|
-| **DID** | Decentralized Identifier - globally unique identifier for agents |
+| **DID** | Decentralized Identifier — globally unique identifier for agents |
 | **did:key** | DID method where identifier is derived from public key |
 | **did:web** | DID method where identifier resolves to a web URL |
-| **VC** | Verifiable Credential - signed, tamper-evident credential |
-| **PermissionVC** | VC that proves permission to call a protected agent |
-| **Protected Agent** | Agent that requires explicit permission to call |
-| **Approval** | Admin decision granting permission for a caller-target pair |
-| **Revocation** | Invalidating a DID or permission before expiration |
+| **VC** | Verifiable Credential — signed, tamper-evident credential |
+| **AgentTagVC** | VC certifying an agent's approved tags (per-agent, issued on tag approval) |
+| **Protected Agent** | (Legacy, removed) Agent that required explicit DID-pair permission |
+| **Access Policy** | Tag-based rule controlling which agents can call which functions |
+| **Tag Approval Rule** | Configuration controlling which tags require admin review |
+| **Approval** | Admin decision granting permission (tags or caller-target pair) |
+| **Revocation** | Invalidating a DID, VC, or permission before expiration |
+| **CanonicalAgentTags** | Normalized tag set: prefers approved_tags, excludes metadata |
+| **LocalVerifier** | SDK component that caches policies/revocations for offline verification |
 
 ---
 

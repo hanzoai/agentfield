@@ -188,6 +188,14 @@ func (s *VCStorage) ListWorkflowVCs() ([]*types.WorkflowVC, error) {
 	return results, nil
 }
 
+// ListAgentTagVCs returns all non-revoked agent tag VCs.
+func (s *VCStorage) ListAgentTagVCs(ctx context.Context) ([]*types.AgentTagVCRecord, error) {
+	if s.storageProvider == nil {
+		return nil, fmt.Errorf("no storage provider configured for VC storage")
+	}
+	return s.storageProvider.ListAgentTagVCs(ctx)
+}
+
 // DeleteExecutionVC is currently a no-op placeholder.
 func (s *VCStorage) DeleteExecutionVC(vcID string) error {
 	logger.Logger.Debug().Str("vc_id", vcID).Msg("DeleteExecutionVC is not implemented - skipping")

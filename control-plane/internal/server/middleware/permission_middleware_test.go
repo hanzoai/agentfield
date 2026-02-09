@@ -17,58 +17,17 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-type testPermissionService struct {
-	checkFn       func(ctx context.Context, callerDID, targetDID string, targetAgentID string, targetTags []string) (*types.PermissionCheck, error)
-	requestFn     func(ctx context.Context, req *types.PermissionRequest) (*types.PermissionApproval, error)
-	isEnabled     bool
-	protectedTags map[string]struct{}
-}
+// --- Test Mocks ---
 
-func (s *testPermissionService) IsEnabled() bool {
-	return s.isEnabled
+type testAgentResolver struct {
+	agents map[string]*types.AgentNode
 }
-
-func (s *testPermissionService) IsAgentProtected(_ string, tags []string) bool {
-	for _, tag := range tags {
-		if _, ok := s.protectedTags[tag]; ok {
-			return true
-		}
-	}
-	return false
-}
-
-func (s *testPermissionService) CheckPermission(ctx context.Context, callerDID, targetDID string, targetAgentID string, targetTags []string) (*types.PermissionCheck, error) {
-	if s.checkFn != nil {
-		return s.checkFn(ctx, callerDID, targetDID, targetAgentID, targetTags)
-	}
-	return &types.PermissionCheck{
-		RequiresPermission: true,
-		HasValidApproval:   true,
-	}, nil
-}
-
-func (s *testPermissionService) RequestPermission(ctx context.Context, req *types.PermissionRequest) (*types.PermissionApproval, error) {
-	if s.requestFn != nil {
-		return s.requestFn(ctx, req)
-	}
-	return nil, nil
-}
-
-type testAgentResolver struct{}
 
 func (r *testAgentResolver) GetAgent(_ context.Context, agentID string) (*types.AgentNode, error) {
-	switch agentID {
-	case "protected-agent":
-		return &types.AgentNode{
-			ID:           agentID,
-			ApprovedTags: []string{"admin"},
-		}, nil
-	default:
-		return &types.AgentNode{
-			ID:           agentID,
-			ApprovedTags: []string{"public"},
-		}, nil
+	if a, ok := r.agents[agentID]; ok {
+		return a, nil
 	}
+	return &types.AgentNode{ID: agentID, ApprovedTags: []string{"public"}}, nil
 }
 
 type failingAgentResolver struct{}
@@ -99,6 +58,17 @@ func (s *testDIDWebService) VerifyDIDOwnership(_ context.Context, did string, me
 	return ed25519.Verify(pub, message, signature), nil
 }
 
+type testPolicyService struct {
+	result *types.PolicyEvaluationResult
+}
+
+func (s *testPolicyService) EvaluateAccess(callerTags, targetTags []string, functionName string, inputParams map[string]any) *types.PolicyEvaluationResult {
+	if s.result != nil {
+		return s.result
+	}
+	return &types.PolicyEvaluationResult{Matched: false}
+}
+
 func signRequestBody(body []byte, did string, privateKey ed25519.PrivateKey, ts time.Time) (map[string]string, error) {
 	timestamp := fmt.Sprintf("%d", ts.Unix())
 	bodyHash := sha256.Sum256(body)
@@ -111,11 +81,13 @@ func signRequestBody(body []byte, did string, privateKey ed25519.PrivateKey, ts 
 	}, nil
 }
 
-func setupProtectedRoute(permissionService PermissionServiceInterface, didService DIDWebServiceInterface, resolver AgentResolverInterface) *gin.Engine {
-	return setupProtectedRouteWithConfig(permissionService, didService, resolver, PermissionConfig{Enabled: true})
+// --- Test Helpers ---
+
+func setupTestRoute(policyService AccessPolicyServiceInterface, didService DIDWebServiceInterface, resolver AgentResolverInterface) *gin.Engine {
+	return setupTestRouteWithConfig(policyService, didService, resolver, PermissionConfig{Enabled: true})
 }
 
-func setupProtectedRouteWithConfig(permissionService PermissionServiceInterface, didService DIDWebServiceInterface, resolver AgentResolverInterface, config PermissionConfig) *gin.Engine {
+func setupTestRouteWithConfig(policyService AccessPolicyServiceInterface, didService DIDWebServiceInterface, resolver AgentResolverInterface, config PermissionConfig) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.Use(DIDAuthMiddleware(didService, DIDAuthConfig{
@@ -126,9 +98,8 @@ func setupProtectedRouteWithConfig(permissionService PermissionServiceInterface,
 		resolver = &testAgentResolver{}
 	}
 	router.Use(PermissionCheckMiddleware(
-		permissionService,
-		nil, // policyService — not tested here
-		nil, // tagVCVerifier — not tested here
+		policyService,
+		nil, // tagVCVerifier
 		resolver,
 		&testDIDResolver{},
 		config,
@@ -139,91 +110,45 @@ func setupProtectedRouteWithConfig(permissionService PermissionServiceInterface,
 	return router
 }
 
-func TestProtectedRoute_WithoutDIDDenied(t *testing.T) {
-	perm := &testPermissionService{
-		isEnabled:     true,
-		protectedTags: map[string]struct{}{"admin": {}},
-	}
-	router := setupProtectedRoute(perm, &testDIDWebService{publicKeys: map[string]ed25519.PublicKey{}}, nil)
+// --- Tests ---
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/protected-agent.reasoner", bytes.NewReader([]byte(`{"x":1}`)))
+func TestPermission_PolicyAllows(t *testing.T) {
+	policy := &testPolicyService{result: &types.PolicyEvaluationResult{
+		Matched:    true,
+		Allowed:    true,
+		PolicyName: "allow-analytics",
+	}}
+	router := setupTestRoute(policy, &testDIDWebService{publicKeys: map[string]ed25519.PublicKey{}}, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/target-agent.query", bytes.NewReader([]byte(`{"x":1}`)))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
-	assert.Contains(t, w.Body.String(), "did_auth_required")
+	assert.Equal(t, http.StatusOK, w.Code)
 }
 
-func TestProtectedRoute_InvalidOrExpiredSignatureDenied(t *testing.T) {
-	publicKey, privateKey, _ := ed25519.GenerateKey(nil)
-	did := "did:web:localhost%3A8080:agents:caller"
-	didService := &testDIDWebService{publicKeys: map[string]ed25519.PublicKey{did: publicKey}}
-	perm := &testPermissionService{
-		isEnabled:     true,
-		protectedTags: map[string]struct{}{"admin": {}},
-	}
-	router := setupProtectedRoute(perm, didService, nil)
+func TestPermission_PolicyDenies(t *testing.T) {
+	policy := &testPolicyService{result: &types.PolicyEvaluationResult{
+		Matched:    true,
+		Allowed:    false,
+		PolicyName: "deny-delete",
+		Reason:     "delete_* functions denied",
+	}}
+	router := setupTestRoute(policy, &testDIDWebService{publicKeys: map[string]ed25519.PublicKey{}}, nil)
 
-	body := []byte(`{"x":1}`)
-
-	t.Run("invalid signature", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/protected-agent.reasoner", bytes.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Caller-DID", did)
-		req.Header.Set("X-DID-Signature", base64.StdEncoding.EncodeToString([]byte("invalid")))
-		req.Header.Set("X-DID-Timestamp", fmt.Sprintf("%d", time.Now().Unix()))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-		assert.Equal(t, http.StatusUnauthorized, w.Code)
-	})
-
-	t.Run("expired timestamp", func(t *testing.T) {
-		headers, _ := signRequestBody(body, did, privateKey, time.Now().Add(-10*time.Minute))
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/protected-agent.reasoner", bytes.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		for k, v := range headers {
-			req.Header.Set(k, v)
-		}
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-		assert.Equal(t, http.StatusUnauthorized, w.Code)
-	})
-}
-
-func TestProtectedRoute_PermissionBackendErrorDenied(t *testing.T) {
-	publicKey, privateKey, _ := ed25519.GenerateKey(nil)
-	did := "did:web:localhost%3A8080:agents:caller"
-	didService := &testDIDWebService{publicKeys: map[string]ed25519.PublicKey{did: publicKey}}
-	perm := &testPermissionService{
-		isEnabled:     true,
-		protectedTags: map[string]struct{}{"admin": {}},
-		checkFn: func(context.Context, string, string, string, []string) (*types.PermissionCheck, error) {
-			return nil, fmt.Errorf("storage unavailable")
-		},
-	}
-	router := setupProtectedRoute(perm, didService, nil)
-
-	body := []byte(`{"x":1}`)
-	headers, _ := signRequestBody(body, did, privateKey, time.Now())
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/protected-agent.reasoner", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/target-agent.delete_records", bytes.NewReader([]byte(`{"x":1}`)))
 	req.Header.Set("Content-Type", "application/json")
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusForbidden, w.Code)
-	assert.Contains(t, w.Body.String(), "permission_check_failed")
+	assert.Contains(t, w.Body.String(), "access_denied")
 }
 
-func TestUnprotectedRoute_WithoutDIDStillWorks(t *testing.T) {
-	perm := &testPermissionService{
-		isEnabled:     true,
-		protectedTags: map[string]struct{}{"admin": {}},
-	}
-	router := setupProtectedRoute(perm, &testDIDWebService{publicKeys: map[string]ed25519.PublicKey{}}, nil)
+func TestPermission_NoPolicyMatchAllows(t *testing.T) {
+	policy := &testPolicyService{result: &types.PolicyEvaluationResult{Matched: false}}
+	router := setupTestRoute(policy, &testDIDWebService{publicKeys: map[string]ed25519.PublicKey{}}, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/open-agent.reasoner", bytes.NewReader([]byte(`{"x":1}`)))
 	req.Header.Set("Content-Type", "application/json")
@@ -233,14 +158,22 @@ func TestUnprotectedRoute_WithoutDIDStillWorks(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
-func TestProtectedRoute_TargetResolutionErrorDenied(t *testing.T) {
-	perm := &testPermissionService{
-		isEnabled:     true,
-		protectedTags: map[string]struct{}{"admin": {}},
-	}
-	router := setupProtectedRoute(perm, &testDIDWebService{publicKeys: map[string]ed25519.PublicKey{}}, &failingAgentResolver{})
+func TestPermission_NilPolicyServiceAllows(t *testing.T) {
+	router := setupTestRoute(nil, &testDIDWebService{publicKeys: map[string]ed25519.PublicKey{}}, nil)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/protected-agent.reasoner", bytes.NewReader([]byte(`{"x":1}`)))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/any-agent.reasoner", bytes.NewReader([]byte(`{"x":1}`)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestPermission_TargetResolutionErrorDenied(t *testing.T) {
+	policy := &testPolicyService{}
+	router := setupTestRoute(policy, &testDIDWebService{publicKeys: map[string]ed25519.PublicKey{}}, &failingAgentResolver{})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/some-agent.reasoner", bytes.NewReader([]byte(`{"x":1}`)))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -249,140 +182,74 @@ func TestProtectedRoute_TargetResolutionErrorDenied(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "target_resolution_failed")
 }
 
-func TestAutoRequestOnDeny_RevokedPermission(t *testing.T) {
-	publicKey, privateKey, _ := ed25519.GenerateKey(nil)
-	did := "did:web:localhost%3A8080:agents:caller"
-	didService := &testDIDWebService{publicKeys: map[string]ed25519.PublicKey{did: publicKey}}
+func TestPermission_PendingApprovalBlocked(t *testing.T) {
+	resolver := &testAgentResolver{agents: map[string]*types.AgentNode{
+		"pending-agent": {ID: "pending-agent", LifecycleStatus: types.AgentStatusPendingApproval},
+	}}
+	policy := &testPolicyService{}
+	router := setupTestRoute(policy, &testDIDWebService{publicKeys: map[string]ed25519.PublicKey{}}, resolver)
 
-	revokedID := int64(42)
-	requestCalled := false
-
-	perm := &testPermissionService{
-		isEnabled:     true,
-		protectedTags: map[string]struct{}{"admin": {}},
-		checkFn: func(_ context.Context, _, _, _ string, _ []string) (*types.PermissionCheck, error) {
-			return &types.PermissionCheck{
-				RequiresPermission: true,
-				HasValidApproval:   false,
-				ApprovalStatus:     types.PermissionStatusRevoked,
-				ApprovalID:         &revokedID,
-			}, nil
-		},
-		requestFn: func(_ context.Context, req *types.PermissionRequest) (*types.PermissionApproval, error) {
-			requestCalled = true
-			return &types.PermissionApproval{
-				ID:     revokedID,
-				Status: types.PermissionStatusPending,
-			}, nil
-		},
-	}
-	router := setupProtectedRouteWithConfig(perm, didService, nil, PermissionConfig{
-		Enabled:           true,
-		AutoRequestOnDeny: true,
-	})
-
-	body := []byte(`{"x":1}`)
-	headers, _ := signRequestBody(body, did, privateKey, time.Now())
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/protected-agent.reasoner", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/pending-agent.reasoner", bytes.NewReader([]byte(`{"x":1}`)))
 	req.Header.Set("Content-Type", "application/json")
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusForbidden, w.Code)
-	assert.True(t, requestCalled, "RequestPermission should be called for revoked permissions")
-	assert.Contains(t, w.Body.String(), "pending")
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	assert.Contains(t, w.Body.String(), "agent_pending_approval")
 }
 
-func TestAutoRequestOnDeny_RejectedPermission(t *testing.T) {
-	publicKey, privateKey, _ := ed25519.GenerateKey(nil)
-	did := "did:web:localhost%3A8080:agents:caller"
-	didService := &testDIDWebService{publicKeys: map[string]ed25519.PublicKey{did: publicKey}}
+func TestPermission_DenyAnonymous_NoIdentityDenied(t *testing.T) {
+	policy := &testPolicyService{result: &types.PolicyEvaluationResult{Matched: false}}
+	router := setupTestRouteWithConfig(policy, &testDIDWebService{publicKeys: map[string]ed25519.PublicKey{}}, nil,
+		PermissionConfig{Enabled: true, DenyAnonymous: true})
 
-	rejectedID := int64(7)
-	requestCalled := false
-
-	perm := &testPermissionService{
-		isEnabled:     true,
-		protectedTags: map[string]struct{}{"admin": {}},
-		checkFn: func(_ context.Context, _, _, _ string, _ []string) (*types.PermissionCheck, error) {
-			return &types.PermissionCheck{
-				RequiresPermission: true,
-				HasValidApproval:   false,
-				ApprovalStatus:     types.PermissionStatusRejected,
-				ApprovalID:         &rejectedID,
-			}, nil
-		},
-		requestFn: func(_ context.Context, req *types.PermissionRequest) (*types.PermissionApproval, error) {
-			requestCalled = true
-			return &types.PermissionApproval{
-				ID:     rejectedID,
-				Status: types.PermissionStatusPending,
-			}, nil
-		},
-	}
-	router := setupProtectedRouteWithConfig(perm, didService, nil, PermissionConfig{
-		Enabled:           true,
-		AutoRequestOnDeny: true,
-	})
-
-	body := []byte(`{"x":1}`)
-	headers, _ := signRequestBody(body, did, privateKey, time.Now())
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/protected-agent.reasoner", bytes.NewReader(body))
+	// Request without any caller identity headers
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/target-agent.query", bytes.NewReader([]byte(`{"x":1}`)))
 	req.Header.Set("Content-Type", "application/json")
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusForbidden, w.Code)
-	assert.True(t, requestCalled, "RequestPermission should be called for rejected permissions")
-	assert.Contains(t, w.Body.String(), "pending")
+	assert.Contains(t, w.Body.String(), "anonymous_caller_denied")
 }
 
-func TestAutoRequestOnDeny_ApprovedStatusNotReRequested(t *testing.T) {
-	publicKey, privateKey, _ := ed25519.GenerateKey(nil)
-	did := "did:web:localhost%3A8080:agents:caller"
-	didService := &testDIDWebService{publicKeys: map[string]ed25519.PublicKey{did: publicKey}}
+func TestPermission_DenyAnonymous_WithAgentHeaderAllowed(t *testing.T) {
+	policy := &testPolicyService{result: &types.PolicyEvaluationResult{Matched: false}}
+	router := setupTestRouteWithConfig(policy, &testDIDWebService{publicKeys: map[string]ed25519.PublicKey{}}, nil,
+		PermissionConfig{Enabled: true, DenyAnonymous: true})
 
-	requestCalled := false
-
-	perm := &testPermissionService{
-		isEnabled:     true,
-		protectedTags: map[string]struct{}{"admin": {}},
-		checkFn: func(_ context.Context, _, _, _ string, _ []string) (*types.PermissionCheck, error) {
-			// Expired approval: status is approved but HasValidApproval is false
-			approvedID := int64(99)
-			return &types.PermissionCheck{
-				RequiresPermission: true,
-				HasValidApproval:   false,
-				ApprovalStatus:     types.PermissionStatusApproved,
-				ApprovalID:         &approvedID,
-			}, nil
-		},
-		requestFn: func(_ context.Context, _ *types.PermissionRequest) (*types.PermissionApproval, error) {
-			requestCalled = true
-			return nil, nil
-		},
-	}
-	router := setupProtectedRouteWithConfig(perm, didService, nil, PermissionConfig{
-		Enabled:           true,
-		AutoRequestOnDeny: true,
-	})
-
-	body := []byte(`{"x":1}`)
-	headers, _ := signRequestBody(body, did, privateKey, time.Now())
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/protected-agent.reasoner", bytes.NewReader(body))
+	// Request with caller agent ID header — not anonymous
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/target-agent.query", bytes.NewReader([]byte(`{"x":1}`)))
 	req.Header.Set("Content-Type", "application/json")
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
+	req.Header.Set("X-Caller-Agent-ID", "caller-agent")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusForbidden, w.Code)
-	assert.False(t, requestCalled, "RequestPermission should NOT be called for approved (expired) permissions")
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestPermission_DenyAnonymousFalse_AllowsAnonymous(t *testing.T) {
+	policy := &testPolicyService{result: &types.PolicyEvaluationResult{Matched: false}}
+	router := setupTestRouteWithConfig(policy, &testDIDWebService{publicKeys: map[string]ed25519.PublicKey{}}, nil,
+		PermissionConfig{Enabled: true, DenyAnonymous: false})
+
+	// Request without any caller identity — DenyAnonymous is false, so allowed
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/target-agent.query", bytes.NewReader([]byte(`{"x":1}`)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestPermission_DisabledAllowsAll(t *testing.T) {
+	policy := &testPolicyService{result: &types.PolicyEvaluationResult{Matched: true, Allowed: false}}
+	router := setupTestRouteWithConfig(policy, &testDIDWebService{publicKeys: map[string]ed25519.PublicKey{}}, nil, PermissionConfig{Enabled: false})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute/any-agent.reasoner", bytes.NewReader([]byte(`{"x":1}`)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
 }

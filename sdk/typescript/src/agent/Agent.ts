@@ -567,7 +567,9 @@ export class Agent {
       } else {
         const body: Record<string, any> = { error: err?.message ?? 'Execution failed' };
         if (err?.responseData) body.error_details = err.responseData;
-        res.status(500).json(body);
+        // Propagate upstream HTTP status (e.g. 403 from permission middleware)
+        const statusCode = (err?.status >= 400) ? err.status : 500;
+        res.status(statusCode).json(body);
       }
     }
   }
@@ -589,7 +591,9 @@ export class Agent {
       } else {
         const body: Record<string, any> = { error: err?.message ?? 'Execution failed' };
         if (err?.responseData) body.error_details = err.responseData;
-        res.status(500).json(body);
+        // Propagate upstream HTTP status (e.g. 403 from permission middleware)
+        const statusCode = (err?.status >= 400) ? err.status : 500;
+        res.status(statusCode).json(body);
       }
     }
   }
@@ -631,7 +635,9 @@ export class Agent {
       } else {
         const body: Record<string, any> = { error: err?.message ?? 'Execution failed' };
         if (err?.responseData) body.error_details = err.responseData;
-        res.status(500).json(body);
+        // Propagate upstream HTTP status (e.g. 403 from permission middleware)
+        const statusCode = (err?.status >= 400) ? err.status : 500;
+        res.status(statusCode).json(body);
       }
     }
   }
@@ -1073,6 +1079,7 @@ export class Agent {
       const publicUrl =
         this.config.publicUrl ?? `http://${hostForUrl ?? '127.0.0.1'}:${port}`;
 
+      const agentTags = this.config.tags ?? [];
       const regResponse = await this.agentFieldClient.register({
         id: this.config.nodeId,
         version: this.config.version,
@@ -1080,7 +1087,9 @@ export class Agent {
         public_url: publicUrl,
         deployment_type: this.config.deploymentType ?? 'long_running',
         reasoners,
-        skills
+        skills,
+        proposed_tags: agentTags,
+        tags: agentTags
       });
 
       // Handle pending approval state: poll until approved

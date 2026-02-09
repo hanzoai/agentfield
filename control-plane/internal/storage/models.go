@@ -413,29 +413,6 @@ type ObservabilityDeadLetterQueueModel struct {
 
 func (ObservabilityDeadLetterQueueModel) TableName() string { return "observability_dead_letter_queue" }
 
-// PermissionApprovalModel represents a permission approval record in the database.
-// This tracks whether a caller agent has been approved to call a target agent.
-type PermissionApprovalModel struct {
-	ID            int64      `gorm:"column:id;primaryKey;autoIncrement"`
-	CallerDID     string     `gorm:"column:caller_did;not null;uniqueIndex:idx_perm_caller_target,priority:1"`
-	TargetDID     string     `gorm:"column:target_did;not null;uniqueIndex:idx_perm_caller_target,priority:2"`
-	CallerAgentID string     `gorm:"column:caller_agent_id;not null;index"`
-	TargetAgentID string     `gorm:"column:target_agent_id;not null;index"`
-	Status        string     `gorm:"column:status;not null;default:'pending';index"`
-	ApprovedBy    *string    `gorm:"column:approved_by"`
-	ApprovedAt    *time.Time `gorm:"column:approved_at"`
-	RejectedBy    *string    `gorm:"column:rejected_by"`
-	RejectedAt    *time.Time `gorm:"column:rejected_at"`
-	RevokedBy     *string    `gorm:"column:revoked_by"`
-	RevokedAt     *time.Time `gorm:"column:revoked_at"`
-	ExpiresAt     *time.Time `gorm:"column:expires_at;index"`
-	Reason        *string    `gorm:"column:reason"`
-	CreatedAt     time.Time  `gorm:"column:created_at;autoCreateTime"`
-	UpdatedAt     time.Time  `gorm:"column:updated_at;autoUpdateTime"`
-}
-
-func (PermissionApprovalModel) TableName() string { return "permission_approvals" }
-
 // DIDDocumentModel represents a DID document record for did:web resolution.
 type DIDDocumentModel struct {
 	DID          string     `gorm:"column:did;primaryKey"`

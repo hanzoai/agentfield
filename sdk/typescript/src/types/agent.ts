@@ -29,6 +29,8 @@ export interface AgentConfig {
   localVerification?: boolean;
   /** Cache refresh interval for local verification in seconds (default: 300). */
   verificationRefreshInterval?: number;
+  /** Agent-level tags for tag-based authorization policies. */
+  tags?: string[];
 }
 
 export interface AIConfig {

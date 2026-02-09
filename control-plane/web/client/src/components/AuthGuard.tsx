@@ -4,8 +4,9 @@ import { useAuth } from "../contexts/AuthContext";
 import { setGlobalApiKey } from "../services/api";
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {
-  const { apiKey, setApiKey, isAuthenticated, authRequired } = useAuth();
+  const { apiKey, setApiKey, setAdminToken, isAuthenticated, authRequired } = useAuth();
   const [inputKey, setInputKey] = useState("");
+  const [inputAdminToken, setInputAdminToken] = useState("");
   const [error, setError] = useState("");
   const [validating, setValidating] = useState(false);
 
@@ -26,6 +27,9 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
       if (response.ok) {
         setApiKey(inputKey);
         setGlobalApiKey(inputKey);
+        if (inputAdminToken.trim()) {
+          setAdminToken(inputAdminToken.trim());
+        }
       } else {
         setError("Invalid API key");
       }
@@ -54,6 +58,15 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
           className="w-full p-3 border rounded-md mb-4 bg-background"
           disabled={validating}
           autoFocus
+        />
+
+        <input
+          type="password"
+          value={inputAdminToken}
+          onChange={(e) => setInputAdminToken(e.target.value)}
+          placeholder="Admin Token (optional — for permission management)"
+          className="w-full p-3 border rounded-md mb-4 bg-background"
+          disabled={validating}
         />
 
         {error && <p className="text-destructive mb-4">{error}</p>}

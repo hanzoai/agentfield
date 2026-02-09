@@ -161,8 +161,16 @@ func (s *VCService) GenerateExecutionVC(ctx *types.ExecutionContext, inputData, 
 		processedErrorMessage = &msg
 	}
 
-	// Resolve caller DID
-	callerIdentity, err := s.didService.ResolveDID(ctx.CallerDID)
+	// Resolve caller DID — fall back to agent's own DID for anonymous/external callers
+	callerDID := ctx.CallerDID
+	if callerDID == "" {
+		callerDID = ctx.AgentNodeDID
+	}
+	if callerDID == "" {
+		// No DID available at all — skip VC generation gracefully
+		return nil, nil
+	}
+	callerIdentity, err := s.didService.ResolveDID(callerDID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve caller DID: %w", err)
 	}
@@ -194,7 +202,7 @@ func (s *VCService) GenerateExecutionVC(ctx *types.ExecutionContext, inputData, 
 	vcDoc.Proof = types.VCProof{
 		Type:               "Ed25519Signature2020",
 		Created:            time.Now().UTC().Format(time.RFC3339),
-		VerificationMethod: fmt.Sprintf("%s#key-1", ctx.CallerDID),
+		VerificationMethod: fmt.Sprintf("%s#key-1", callerDID),
 		ProofPurpose:       "assertionMethod",
 		ProofValue:         signature,
 	}
@@ -214,9 +222,9 @@ func (s *VCService) GenerateExecutionVC(ctx *types.ExecutionContext, inputData, 
 		ExecutionID:  ctx.ExecutionID,
 		WorkflowID:   ctx.WorkflowID,
 		SessionID:    ctx.SessionID,
-		IssuerDID:    ctx.CallerDID,
+		IssuerDID:    callerDID,
 		TargetDID:    ctx.TargetDID,
-		CallerDID:    ctx.CallerDID,
+		CallerDID:    callerDID,
 		VCDocument:   json.RawMessage(vcDocBytes),
 		Signature:    signature,
 		StorageURI:   "",
@@ -477,63 +485,6 @@ func (s *VCService) signVC(vcDoc *types.VCDocument, callerIdentity *types.DIDIde
 	signature := ed25519.Sign(privateKey, canonicalBytes)
 
 	return base64.RawURLEncoding.EncodeToString(signature), nil
-}
-
-// SignPermissionVC signs a PermissionVCDocument using the control plane's issuer DID.
-// Returns the signed proof to be set on the VC document.
-func (s *VCService) SignPermissionVC(vc *types.PermissionVCDocument) (*types.VCProof, error) {
-	// Resolve the issuer's identity (control plane DID)
-	issuerIdentity, err := s.didService.ResolveDID(vc.Issuer)
-	if err != nil {
-		// If the issuer DID can't be resolved (e.g. did:web not registered yet),
-		// fall back to unsigned audit record
-		logger.Logger.Warn().Err(err).Str("issuer", vc.Issuer).Msg("Cannot resolve issuer DID for VC signing, falling back to unsigned")
-		return &types.VCProof{
-			Type:         "UnsignedAuditRecord",
-			Created:      time.Now().Format(time.RFC3339),
-			ProofPurpose: "assertionMethod",
-			ProofValue:   "",
-		}, nil
-	}
-
-	// Create canonical representation (without proof) for signing
-	vcCopy := *vc
-	vcCopy.Proof = nil
-	canonicalBytes, err := json.Marshal(vcCopy)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal permission VC for signing: %w", err)
-	}
-
-	// Parse private key from JWK
-	var jwk map[string]interface{}
-	if err := json.Unmarshal([]byte(issuerIdentity.PrivateKeyJWK), &jwk); err != nil {
-		return nil, fmt.Errorf("failed to parse issuer private key JWK: %w", err)
-	}
-
-	dValue, ok := jwk["d"].(string)
-	if !ok {
-		return nil, fmt.Errorf("invalid issuer private key JWK: missing 'd' parameter")
-	}
-
-	privateKeySeed, err := base64.RawURLEncoding.DecodeString(dValue)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode issuer private key seed: %w", err)
-	}
-
-	if len(privateKeySeed) != ed25519.SeedSize {
-		return nil, fmt.Errorf("invalid issuer private key seed length: got %d, want %d", len(privateKeySeed), ed25519.SeedSize)
-	}
-
-	privateKey := ed25519.NewKeyFromSeed(privateKeySeed)
-	signature := ed25519.Sign(privateKey, canonicalBytes)
-
-	return &types.VCProof{
-		Type:               "Ed25519Signature2020",
-		Created:            time.Now().UTC().Format(time.RFC3339),
-		VerificationMethod: fmt.Sprintf("%s#key-1", vc.Issuer),
-		ProofPurpose:       "assertionMethod",
-		ProofValue:         base64.RawURLEncoding.EncodeToString(signature),
-	}, nil
 }
 
 // SignAgentTagVC signs an AgentTagVCDocument using the control plane's issuer DID.
@@ -986,6 +937,14 @@ func (s *VCService) ListWorkflowVCs() ([]*types.WorkflowVC, error) {
 		return nil, fmt.Errorf("DID system is disabled")
 	}
 	return s.vcStorage.ListWorkflowVCs()
+}
+
+// ListAgentTagVCs returns all non-revoked agent tag VCs.
+func (s *VCService) ListAgentTagVCs() ([]*types.AgentTagVCRecord, error) {
+	if !s.config.Enabled {
+		return nil, fmt.Errorf("DID system is disabled")
+	}
+	return s.vcStorage.ListAgentTagVCs(context.Background())
 }
 
 // collectDIDResolutionBundle collects all unique DIDs from the VC chain and resolves their public keys.

@@ -311,6 +311,42 @@ class TestAttemptConnection:
 
         assert ConnectionState.CONNECTING in states_observed
 
+    @pytest.mark.asyncio
+    async def test_attempt_connection_pending_approval_blocks(self, mock_agent):
+        """Test that pending_approval status blocks until approved (D1 fix)."""
+        # Registration returns pending_approval
+        mock_agent.client.register_agent_with_status = AsyncMock(
+            return_value=(True, {"status": "pending_approval", "pending_tags": ["sensitive"]})
+        )
+        mock_agent.agent_tags = ["sensitive"]
+
+        # Mock _wait_for_approval to resolve immediately
+        mock_agent.agentfield_handler._wait_for_approval = AsyncMock()
+
+        manager = ConnectionManager(mock_agent)
+        result = await manager._attempt_connection()
+
+        assert result is True
+        assert manager.state == ConnectionState.CONNECTED
+        # Verify _wait_for_approval was called
+        mock_agent.agentfield_handler._wait_for_approval.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_attempt_connection_no_pending_approval_does_not_block(self, mock_agent):
+        """Test that non-pending registration does not call _wait_for_approval."""
+        mock_agent.client.register_agent_with_status = AsyncMock(
+            return_value=(True, {"status": "ready"})
+        )
+        mock_agent.agentfield_handler._wait_for_approval = AsyncMock()
+
+        manager = ConnectionManager(mock_agent)
+        result = await manager._attempt_connection()
+
+        assert result is True
+        assert manager.state == ConnectionState.CONNECTED
+        # Verify _wait_for_approval was NOT called
+        mock_agent.agentfield_handler._wait_for_approval.assert_not_awaited()
+
 
 # Reconnection Loop Tests
 

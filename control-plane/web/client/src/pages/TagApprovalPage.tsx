@@ -19,6 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import * as tagApprovalApi from "../services/tagApprovalApi";
 import type { PendingAgentResponse } from "../services/tagApprovalApi";
+import { AdminTokenPrompt } from "../components/AdminTokenPrompt";
 
 export function TagApprovalPage() {
   const [agents, setAgents] = useState<PendingAgentResponse[]>([]);
@@ -107,11 +108,11 @@ export function TagApprovalPage() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Tag Approvals</h1>
+          <h1 className="text-2xl font-semibold">Tag Approvals</h1>
           <p className="text-sm text-muted-foreground mt-1">
             Review and approve agent tag registrations
           </p>
@@ -129,6 +130,9 @@ export function TagApprovalPage() {
           <AlertTitle>Error</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
         </Alert>
+      )}
+      {error && error.toLowerCase().includes("forbidden") && (
+        <AdminTokenPrompt onTokenSet={fetchAgents} />
       )}
       {success && (
         <Alert>

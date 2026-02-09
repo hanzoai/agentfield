@@ -82,19 +82,38 @@ features:
       domain: "localhost:8080"
       timestamp_window_seconds: 300
       default_approval_duration_hours: 24
-      auto_request_on_deny: true
       admin_token: "admin-secret"
       internal_token: "internal-secret-token"
-      protected_agents:
-        - pattern_type: "tag"
-          pattern: "sensitive"
-          description: "Agents tagged sensitive require permission"
-        - pattern_type: "agent_id"
-          pattern: "payment-gateway"
-          description: "Payment gateway requires explicit permission"
-        - pattern_type: "agent_id"
-          pattern: "permission-agent-b"
-          description: "Test protected agent for permission testing"
-        - pattern_type: "agent_id"
-          pattern: "go-perm-target"
-          description: "Go SDK test protected agent"
+      deny_anonymous: true
+      tag_approval_rules:
+        default_mode: "auto"
+        rules:
+          - tags: ["sensitive", "financial", "payments"]
+            approval: "manual"
+            reason: "Sensitive/financial tags require admin review"
+          - tags: ["public", "analytics"]
+            approval: "auto"
+            reason: "Auto-approved"
+      access_policies:
+        - name: "analytics_to_data_service"
+          caller_tags: ["analytics"]
+          target_tags: ["data-service"]
+          allow_functions: ["query_*", "get_*", "analyze_*"]
+          deny_functions: ["delete_*", "update_*"]
+          constraints:
+            limit:
+              operator: "<="
+              value: 1000
+          action: "allow"
+          priority: 100
+        - name: "payments_to_payments"
+          caller_tags: ["payments"]
+          target_tags: ["payments"]
+          allow_functions: ["process_*", "get_*"]
+          deny_functions: ["refund_*"]
+          constraints:
+            amount:
+              operator: "<="
+              value: 10000
+          action: "allow"
+          priority: 90
