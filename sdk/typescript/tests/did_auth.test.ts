@@ -4,7 +4,8 @@ import {
   DIDAuthenticator,
   HEADER_CALLER_DID,
   HEADER_DID_SIGNATURE,
-  HEADER_DID_TIMESTAMP
+  HEADER_DID_TIMESTAMP,
+  HEADER_DID_NONCE
 } from '../src/client/DIDAuthenticator.js';
 
 /**
@@ -94,14 +95,15 @@ describe('DIDAuthenticator', () => {
       vi.restoreAllMocks();
     });
 
-    it('returns all three required headers', () => {
+    it('returns all four required headers', () => {
       const body = Buffer.from('{"input":"hello"}');
       const headers = auth.signRequest(body);
 
       expect(headers).toHaveProperty(HEADER_CALLER_DID);
       expect(headers).toHaveProperty(HEADER_DID_SIGNATURE);
       expect(headers).toHaveProperty(HEADER_DID_TIMESTAMP);
-      expect(Object.keys(headers)).toHaveLength(3);
+      expect(headers).toHaveProperty(HEADER_DID_NONCE);
+      expect(Object.keys(headers)).toHaveLength(4);
     });
 
     it('sets correct header names matching Go SDK constants', () => {
@@ -129,8 +131,9 @@ describe('DIDAuthenticator', () => {
 
       // Reconstruct the exact payload the server would build
       const timestamp = headers[HEADER_DID_TIMESTAMP];
+      const nonce = headers[HEADER_DID_NONCE];
       const bodyHash = crypto.createHash('sha256').update(body).digest('hex');
-      const expectedPayload = `${timestamp}:${bodyHash}`;
+      const expectedPayload = `${timestamp}:${nonce}:${bodyHash}`;
 
       // Decode signature from standard base64
       const sigBytes = Buffer.from(headers[HEADER_DID_SIGNATURE], 'base64');
@@ -140,18 +143,22 @@ describe('DIDAuthenticator', () => {
       expect(valid).toBe(true);
     });
 
-    it('payload format is "{timestamp}:{lowercase_hex_sha256}" matching Go fmt.Sprintf("%s:%x")', () => {
+    it('payload format is "{timestamp}:{nonce}:{lowercase_hex_sha256}" matching Go fmt.Sprintf("%s:%s:%x")', () => {
       const body = Buffer.from('{"data":"test"}');
       const headers = auth.signRequest(body);
 
       const timestamp = headers[HEADER_DID_TIMESTAMP];
+      const nonce = headers[HEADER_DID_NONCE];
       const bodyHash = crypto.createHash('sha256').update(body).digest('hex');
 
       // Verify the hash is lowercase hex, 64 chars (256 bits)
       expect(bodyHash).toMatch(/^[0-9a-f]{64}$/);
 
+      // Verify the nonce is hex-encoded 16 bytes (32 hex chars)
+      expect(nonce).toMatch(/^[0-9a-f]{32}$/);
+
       // Verify the full payload matches the Go format
-      const expectedPayload = `${timestamp}:${bodyHash}`;
+      const expectedPayload = `${timestamp}:${nonce}:${bodyHash}`;
 
       // Decode and verify signature against this exact payload
       const sigBytes = Buffer.from(headers[HEADER_DID_SIGNATURE], 'base64');
@@ -184,18 +191,25 @@ describe('DIDAuthenticator', () => {
         expect(fromStd).toHaveLength(64);
         // And it must verify
         const timestamp = headers[HEADER_DID_TIMESTAMP];
+        const nonce = headers[HEADER_DID_NONCE];
         const bodyHash = crypto.createHash('sha256').update(body).digest('hex');
-        const payload = `${timestamp}:${bodyHash}`;
+        const payload = `${timestamp}:${nonce}:${bodyHash}`;
         expect(crypto.verify(null, Buffer.from(payload), testPublicKey, fromStd)).toBe(true);
       }
     });
 
-    it('produces deterministic signatures (Ed25519 is deterministic)', () => {
+    it('produces deterministic signatures for same nonce (Ed25519 is deterministic)', () => {
+      const fixedNonce = Buffer.alloc(16, 0xab);
+      const randomBytesSpy = vi.spyOn(crypto, 'randomBytes').mockReturnValue(fixedNonce as any);
+
       const body = Buffer.from('{"deterministic":"test"}');
       const h1 = auth.signRequest(body);
       const h2 = auth.signRequest(body);
       expect(h1[HEADER_DID_SIGNATURE]).toBe(h2[HEADER_DID_SIGNATURE]);
       expect(h1[HEADER_DID_TIMESTAMP]).toBe(h2[HEADER_DID_TIMESTAMP]);
+      expect(h1[HEADER_DID_NONCE]).toBe(h2[HEADER_DID_NONCE]);
+
+      randomBytesSpy.mockRestore();
     });
 
     it('different bodies produce different signatures', () => {
@@ -222,24 +236,29 @@ describe('DIDAuthenticator', () => {
     /**
      * This test manually replicates the Go SDK signing algorithm step-by-step:
      *   timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+     *   nonce := hex.EncodeToString(randomBytes(16))
      *   bodyHash := sha256.Sum256(body)
-     *   payload := fmt.Sprintf("%s:%x", timestamp, bodyHash)
+     *   payload := fmt.Sprintf("%s:%s:%x", timestamp, nonce, bodyHash)
      *   signature := ed25519.Sign(privateKey, []byte(payload))
      *   signatureB64 := base64.StdEncoding.EncodeToString(signature)
      *
      * Then verifies the TS DIDAuthenticator produces an identical signature.
      */
-    it('produces byte-identical signatures to Go SDK algorithm for same key, body, and timestamp', () => {
+    it('produces byte-identical signatures to Go SDK algorithm for same key, body, timestamp, and nonce', () => {
       const FIXED_TS = 1738796400;
       vi.spyOn(Date, 'now').mockReturnValue(FIXED_TS * 1000);
+
+      const fixedNonce = Buffer.alloc(16, 0xca);
+      vi.spyOn(crypto, 'randomBytes').mockReturnValue(fixedNonce as any);
 
       const auth = new DIDAuthenticator(TEST_DID, testJwk);
       const body = Buffer.from('{"target":"other-agent.skill","input":{"data":"test"}}');
 
       // --- Replicate Go SDK signing manually ---
       const timestamp = String(FIXED_TS);
+      const nonce = fixedNonce.toString('hex');
       const bodyHash = crypto.createHash('sha256').update(body).digest('hex');
-      const goPayload = `${timestamp}:${bodyHash}`;
+      const goPayload = `${timestamp}:${nonce}:${bodyHash}`;
       // Sign with the same private key
       const { privateKey } = generateTestKeypair(TEST_SEED);
       const goSignature = crypto.sign(null, Buffer.from(goPayload), privateKey);
@@ -251,6 +270,7 @@ describe('DIDAuthenticator', () => {
       // --- Assert byte-identical ---
       expect(headers[HEADER_DID_SIGNATURE]).toBe(goSignatureB64);
       expect(headers[HEADER_DID_TIMESTAMP]).toBe(timestamp);
+      expect(headers[HEADER_DID_NONCE]).toBe(nonce);
       expect(headers[HEADER_CALLER_DID]).toBe(TEST_DID);
 
       vi.restoreAllMocks();
@@ -265,12 +285,13 @@ describe('DIDAuthenticator', () => {
       const headers = auth.signRequest(body);
 
       // Server-side verification steps (from middleware/did_auth.go):
-      // 1. Read timestamp from header
+      // 1. Read timestamp and nonce from headers
       const timestamp = headers[HEADER_DID_TIMESTAMP];
+      const nonce = headers[HEADER_DID_NONCE];
       // 2. Hash body bytes
       const bodyHash = crypto.createHash('sha256').update(body).digest('hex');
-      // 3. Build payload
-      const payload = `${timestamp}:${bodyHash}`;
+      // 3. Build payload (with nonce when present, matching server logic)
+      const payload = `${timestamp}:${nonce}:${bodyHash}`;
       // 4. Decode signature from base64 (StdEncoding)
       const sigBytes = Buffer.from(headers[HEADER_DID_SIGNATURE], 'base64');
       // 5. Verify with public key
