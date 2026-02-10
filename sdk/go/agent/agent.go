@@ -314,7 +314,7 @@ type Agent struct {
 	vcGenerator *did.VCGenerator
 
 	// Local verification (decentralized mode)
-	localVerifier                *LocalVerifier
+	localVerifier               *LocalVerifier
 	realtimeValidationFunctions map[string]struct{}
 
 	serverMu sync.RWMutex
@@ -1236,10 +1236,25 @@ func (a *Agent) handleReasoner(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		a.logger.Printf("reasoner %s failed: %v", name, err)
 		a.maybeGenerateVC(execCtx, input, nil, "failed", err.Error(), durationMS, reasoner)
-		response := map[string]any{
-			"error": err.Error(),
+		// Preserve structured downstream errors (e.g. policy denies from inner
+		// agent calls) so local endpoint callers receive the correct status code.
+		var execErr *ExecuteError
+		if errors.As(err, &execErr) {
+			response := map[string]any{"error": execErr.Message}
+			if execErr.ErrorDetails != nil {
+				response["error_details"] = execErr.ErrorDetails
+			}
+			statusCode := execErr.StatusCode
+			if statusCode < 400 {
+				statusCode = http.StatusInternalServerError
+			}
+			writeJSON(w, statusCode, response)
+			return
 		}
-		writeJSON(w, http.StatusInternalServerError, response)
+
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"error": err.Error(),
+		})
 		return
 	}
 

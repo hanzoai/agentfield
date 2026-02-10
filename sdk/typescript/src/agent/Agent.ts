@@ -1005,7 +1005,10 @@ export class Agent {
         if (params.respond && params.res) {
           const body: Record<string, any> = { error: err?.message ?? 'Execution failed' };
           if (err?.responseData) body.error_details = err.responseData;
-          params.res.status(500).json(body);
+          const statusCode = (err?.status >= 400)
+            ? err.status
+            : ((err?.statusCode >= 400) ? err.statusCode : 500);
+          params.res.status(statusCode).json(body);
           return;
         }
         throw err;
@@ -1059,7 +1062,10 @@ export class Agent {
         if (params.respond && params.res) {
           const body: Record<string, any> = { error: err?.message ?? 'Execution failed' };
           if (err?.responseData) body.error_details = err.responseData;
-          params.res.status(500).json(body);
+          const statusCode = (err?.status >= 400)
+            ? err.status
+            : ((err?.statusCode >= 400) ? err.statusCode : 500);
+          params.res.status(statusCode).json(body);
           return;
         }
         throw err;
