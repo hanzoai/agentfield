@@ -13,6 +13,7 @@ from agentfield.did_auth import (
     HEADER_CALLER_DID,
     HEADER_DID_SIGNATURE,
     HEADER_DID_TIMESTAMP,
+    HEADER_DID_NONCE,
     DIDAuthenticator,
     _load_ed25519_private_key,
     create_did_auth_headers,
@@ -162,15 +163,15 @@ class TestLoadEd25519PrivateKey:
 class TestSignRequest:
     """Tests for the sign_request function."""
 
-    def test_returns_three_element_tuple(self, ed25519_jwk, did_string):
+    def test_returns_four_element_tuple(self, ed25519_jwk, did_string):
         jwk_str, _, _ = ed25519_jwk
         result = sign_request(b"hello", jwk_str, did_string)
         assert isinstance(result, tuple)
-        assert len(result) == 3
+        assert len(result) == 4
 
     def test_signature_is_valid_base64(self, ed25519_jwk, did_string):
         jwk_str, _, _ = ed25519_jwk
-        sig_b64, _, _ = sign_request(b"body", jwk_str, did_string)
+        sig_b64, _, _, _ = sign_request(b"body", jwk_str, did_string)
         # Should decode without error
         decoded = base64.b64decode(sig_b64)
         assert len(decoded) == 64  # Ed25519 signature
@@ -178,24 +179,30 @@ class TestSignRequest:
     def test_timestamp_is_recent(self, ed25519_jwk, did_string):
         jwk_str, _, _ = ed25519_jwk
         before = int(time.time())
-        _, timestamp_str, _ = sign_request(b"body", jwk_str, did_string)
+        _, timestamp_str, _, _ = sign_request(b"body", jwk_str, did_string)
         after = int(time.time())
         ts = int(timestamp_str)
         assert before <= ts <= after
 
+    def test_nonce_is_hex_string(self, ed25519_jwk, did_string):
+        jwk_str, _, _ = ed25519_jwk
+        _, _, nonce, _ = sign_request(b"body", jwk_str, did_string)
+        assert len(nonce) == 32  # 16 bytes = 32 hex chars
+        int(nonce, 16)  # Should not raise
+
     def test_did_is_returned_unchanged(self, ed25519_jwk, did_string):
         jwk_str, _, _ = ed25519_jwk
-        _, _, returned_did = sign_request(b"body", jwk_str, did_string)
+        _, _, _, returned_did = sign_request(b"body", jwk_str, did_string)
         assert returned_did == did_string
 
     def test_signature_verifies_with_public_key(self, ed25519_jwk, did_string):
         jwk_str, public_key, _ = ed25519_jwk
         body = b"some request body"
-        sig_b64, timestamp_str, _ = sign_request(body, jwk_str, did_string)
+        sig_b64, timestamp_str, nonce, _ = sign_request(body, jwk_str, did_string)
 
         # Reconstruct the payload the same way sign_request does
         body_hash = hashlib.sha256(body).hexdigest()
-        payload = f"{timestamp_str}:{body_hash}".encode("utf-8")
+        payload = f"{timestamp_str}:{nonce}:{body_hash}".encode("utf-8")
 
         sig_bytes = base64.b64decode(sig_b64)
         # verify raises InvalidSignature on failure
@@ -203,9 +210,17 @@ class TestSignRequest:
 
     def test_different_bodies_produce_different_signatures(self, ed25519_jwk, did_string):
         jwk_str, _, _ = ed25519_jwk
-        sig1, _, _ = sign_request(b"body_a", jwk_str, did_string)
-        sig2, _, _ = sign_request(b"body_b", jwk_str, did_string)
+        sig1, _, _, _ = sign_request(b"body_a", jwk_str, did_string)
+        sig2, _, _, _ = sign_request(b"body_b", jwk_str, did_string)
         # Signatures should differ (different body hash)
+        assert sig1 != sig2
+
+    def test_same_body_produces_different_signatures_via_nonce(self, ed25519_jwk, did_string):
+        """Two calls with the same body should produce different signatures due to nonce."""
+        jwk_str, _, _ = ed25519_jwk
+        sig1, _, nonce1, _ = sign_request(b"same body", jwk_str, did_string)
+        sig2, _, nonce2, _ = sign_request(b"same body", jwk_str, did_string)
+        assert nonce1 != nonce2
         assert sig1 != sig2
 
     def test_invalid_key_raises(self, did_string):
@@ -221,12 +236,13 @@ class TestSignRequest:
 class TestCreateDIDAuthHeaders:
     """Tests for the create_did_auth_headers convenience function."""
 
-    def test_returns_all_three_headers(self, ed25519_jwk, did_string):
+    def test_returns_all_four_headers(self, ed25519_jwk, did_string):
         jwk_str, _, _ = ed25519_jwk
         headers = create_did_auth_headers(b"body", jwk_str, did_string)
         assert HEADER_CALLER_DID in headers
         assert HEADER_DID_SIGNATURE in headers
         assert HEADER_DID_TIMESTAMP in headers
+        assert HEADER_DID_NONCE in headers
 
     def test_caller_did_matches_input(self, ed25519_jwk, did_string):
         jwk_str, _, _ = ed25519_jwk
@@ -237,6 +253,13 @@ class TestCreateDIDAuthHeaders:
         jwk_str, _, _ = ed25519_jwk
         headers = create_did_auth_headers(b"body", jwk_str, did_string)
         assert headers[HEADER_DID_TIMESTAMP].isdigit()
+
+    def test_nonce_header_is_hex(self, ed25519_jwk, did_string):
+        jwk_str, _, _ = ed25519_jwk
+        headers = create_did_auth_headers(b"body", jwk_str, did_string)
+        nonce = headers[HEADER_DID_NONCE]
+        assert len(nonce) == 32
+        int(nonce, 16)  # Should not raise
 
 
 # ===========================================================================
@@ -294,6 +317,7 @@ class TestDIDAuthenticator:
         assert HEADER_CALLER_DID in headers
         assert HEADER_DID_SIGNATURE in headers
         assert HEADER_DID_TIMESTAMP in headers
+        assert HEADER_DID_NONCE in headers
         assert headers[HEADER_CALLER_DID] == did_string
 
     def test_sign_headers_signature_is_verifiable(self, ed25519_jwk, did_string):
@@ -304,8 +328,9 @@ class TestDIDAuthenticator:
 
         sig_bytes = base64.b64decode(headers[HEADER_DID_SIGNATURE])
         ts = headers[HEADER_DID_TIMESTAMP]
+        nonce = headers[HEADER_DID_NONCE]
         body_hash = hashlib.sha256(body).hexdigest()
-        payload = f"{ts}:{body_hash}".encode("utf-8")
+        payload = f"{ts}:{nonce}:{body_hash}".encode("utf-8")
         public_key.verify(sig_bytes, payload)
 
     # --- set_credentials ---
@@ -338,8 +363,9 @@ class TestDIDAuthenticator:
         headers = auth.sign_headers(body)
         sig_bytes = base64.b64decode(headers[HEADER_DID_SIGNATURE])
         ts = headers[HEADER_DID_TIMESTAMP]
+        nonce = headers[HEADER_DID_NONCE]
         body_hash = hashlib.sha256(body).hexdigest()
-        payload = f"{ts}:{body_hash}".encode("utf-8")
+        payload = f"{ts}:{nonce}:{body_hash}".encode("utf-8")
         pub2.verify(sig_bytes, payload)
 
     # --- get_auth_info ---
@@ -368,36 +394,36 @@ class TestEdgeCases:
     def test_empty_body(self, ed25519_jwk, did_string):
         jwk_str, public_key, _ = ed25519_jwk
         body = b""
-        sig_b64, ts, _ = sign_request(body, jwk_str, did_string)
+        sig_b64, ts, nonce, _ = sign_request(body, jwk_str, did_string)
         body_hash = hashlib.sha256(body).hexdigest()
-        payload = f"{ts}:{body_hash}".encode("utf-8")
+        payload = f"{ts}:{nonce}:{body_hash}".encode("utf-8")
         sig_bytes = base64.b64decode(sig_b64)
         public_key.verify(sig_bytes, payload)
 
     def test_large_body(self, ed25519_jwk, did_string):
         jwk_str, public_key, _ = ed25519_jwk
         body = b"x" * (1024 * 1024)  # 1 MB
-        sig_b64, ts, _ = sign_request(body, jwk_str, did_string)
+        sig_b64, ts, nonce, _ = sign_request(body, jwk_str, did_string)
         body_hash = hashlib.sha256(body).hexdigest()
-        payload = f"{ts}:{body_hash}".encode("utf-8")
+        payload = f"{ts}:{nonce}:{body_hash}".encode("utf-8")
         sig_bytes = base64.b64decode(sig_b64)
         public_key.verify(sig_bytes, payload)
 
     def test_non_ascii_body(self, ed25519_jwk, did_string):
         jwk_str, public_key, _ = ed25519_jwk
         body = "Unicode payload: \u00e9\u00e8\u00ea \u4e16\u754c \U0001f680".encode("utf-8")
-        sig_b64, ts, _ = sign_request(body, jwk_str, did_string)
+        sig_b64, ts, nonce, _ = sign_request(body, jwk_str, did_string)
         body_hash = hashlib.sha256(body).hexdigest()
-        payload = f"{ts}:{body_hash}".encode("utf-8")
+        payload = f"{ts}:{nonce}:{body_hash}".encode("utf-8")
         sig_bytes = base64.b64decode(sig_b64)
         public_key.verify(sig_bytes, payload)
 
     def test_binary_body(self, ed25519_jwk, did_string):
         jwk_str, public_key, _ = ed25519_jwk
         body = bytes(range(256))
-        sig_b64, ts, _ = sign_request(body, jwk_str, did_string)
+        sig_b64, ts, nonce, _ = sign_request(body, jwk_str, did_string)
         body_hash = hashlib.sha256(body).hexdigest()
-        payload = f"{ts}:{body_hash}".encode("utf-8")
+        payload = f"{ts}:{nonce}:{body_hash}".encode("utf-8")
         sig_bytes = base64.b64decode(sig_b64)
         public_key.verify(sig_bytes, payload)
 
@@ -408,6 +434,7 @@ class TestEdgeCases:
         assert HEADER_DID_SIGNATURE in headers
         sig_bytes = base64.b64decode(headers[HEADER_DID_SIGNATURE])
         ts = headers[HEADER_DID_TIMESTAMP]
+        nonce = headers[HEADER_DID_NONCE]
         body_hash = hashlib.sha256(b"").hexdigest()
-        payload = f"{ts}:{body_hash}".encode("utf-8")
+        payload = f"{ts}:{nonce}:{body_hash}".encode("utf-8")
         public_key.verify(sig_bytes, payload)

@@ -2,8 +2,10 @@ package client
 
 import (
 	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -15,6 +17,7 @@ const (
 	HeaderCallerDID    = "X-Caller-DID"
 	HeaderDIDSignature = "X-DID-Signature"
 	HeaderDIDTimestamp = "X-DID-Timestamp"
+	HeaderDIDNonce     = "X-DID-Nonce"
 )
 
 // DIDAuthenticator handles DID authentication for agent requests.
@@ -62,11 +65,19 @@ func (a *DIDAuthenticator) SignRequest(body []byte) map[string]string {
 	// Get current timestamp
 	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
 
+	// Generate per-request nonce to prevent replay detection when
+	// multiple requests have the same body within the same second
+	nonceBytes := make([]byte, 16)
+	if _, err := rand.Read(nonceBytes); err != nil {
+		return nil
+	}
+	nonce := hex.EncodeToString(nonceBytes)
+
 	// Hash the body
 	bodyHash := sha256.Sum256(body)
 
-	// Create payload: "{timestamp}:{body_hash}"
-	payload := fmt.Sprintf("%s:%x", timestamp, bodyHash)
+	// Create payload: "{timestamp}:{nonce}:{body_hash}"
+	payload := fmt.Sprintf("%s:%s:%x", timestamp, nonce, bodyHash)
 
 	// Sign the payload
 	signature := ed25519.Sign(a.privateKey, []byte(payload))
@@ -78,6 +89,7 @@ func (a *DIDAuthenticator) SignRequest(body []byte) map[string]string {
 		HeaderCallerDID:    a.did,
 		HeaderDIDSignature: signatureB64,
 		HeaderDIDTimestamp: timestamp,
+		HeaderDIDNonce:     nonce,
 	}
 }
 

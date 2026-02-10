@@ -38,6 +38,7 @@ from agentfield.execution_context import (
     reset_execution_context,
     set_execution_context,
 )
+from agentfield.execution_state import ExecuteError
 from agentfield.did_manager import DIDManager
 from agentfield.vc_generator import VCGenerator
 from agentfield.mcp_client import MCPClientRegistry
@@ -1841,6 +1842,28 @@ class Agent(FastAPI):
                     parent_execution_id=execution_context.parent_execution_id,
                 )
             raise cancel_err
+        except ExecuteError as exec_err:
+            # Propagate upstream HTTP status codes from cross-agent calls.
+            # Without this, a 403 from the inner call would become 500
+            # (unhandled exception) and then 502 at the outer control plane.
+            if hasattr(self, "workflow_handler") and self.workflow_handler:
+                end_time = time.time()
+                await self.workflow_handler.notify_call_error(
+                    execution_context.execution_id,
+                    execution_context.workflow_id,
+                    str(exec_err),
+                    int((end_time - start_time) * 1000),
+                    execution_context,
+                    input_data=payload_dict,
+                    parent_execution_id=execution_context.parent_execution_id,
+                )
+            detail = {"error": str(exec_err)}
+            if exec_err.error_details:
+                detail["error_details"] = exec_err.error_details
+            raise HTTPException(
+                status_code=exec_err.status_code,
+                detail=detail,
+            )
         except HTTPException as http_exc:
             if hasattr(self, "workflow_handler") and self.workflow_handler:
                 end_time = time.time()

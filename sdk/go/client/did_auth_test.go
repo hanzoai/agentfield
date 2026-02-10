@@ -189,9 +189,10 @@ func TestDIDSignRequest(t *testing.T) {
 		assert.Equal(t, testDID, headers[HeaderCallerDID])
 		assert.NotEmpty(t, headers[HeaderDIDSignature])
 		assert.NotEmpty(t, headers[HeaderDIDTimestamp])
+		assert.NotEmpty(t, headers[HeaderDIDNonce])
 
-		// Verify exactly three headers are returned
-		assert.Len(t, headers, 3)
+		// Verify exactly four headers are returned
+		assert.Len(t, headers, 4)
 	})
 
 	t.Run("timestamp is a valid unix timestamp", func(t *testing.T) {
@@ -220,16 +221,16 @@ func TestDIDSignRequest(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, sigBytes, ed25519.SignatureSize)
 
-		// Reconstruct the payload: "{timestamp}:{sha256_hex_hash}"
+		// Reconstruct the payload: "{timestamp}:{nonce}:{sha256_hex_hash}"
 		bodyHash := sha256.Sum256(body)
-		payload := fmt.Sprintf("%s:%x", headers[HeaderDIDTimestamp], bodyHash)
+		payload := fmt.Sprintf("%s:%s:%x", headers[HeaderDIDTimestamp], headers[HeaderDIDNonce], bodyHash)
 
 		// Verify with the public key
 		assert.True(t, ed25519.Verify(pub, []byte(payload), sigBytes),
 			"Ed25519 signature verification failed")
 	})
 
-	t.Run("payload format is timestamp:sha256hex", func(t *testing.T) {
+	t.Run("payload format is timestamp:nonce:sha256hex", func(t *testing.T) {
 		auth, err := NewDIDAuthenticator(testDID, jwkStr)
 		require.NoError(t, err)
 
@@ -238,7 +239,7 @@ func TestDIDSignRequest(t *testing.T) {
 
 		// Manually compute expected hash
 		expectedHash := sha256.Sum256(body)
-		expectedPayload := fmt.Sprintf("%s:%x", headers[HeaderDIDTimestamp], expectedHash)
+		expectedPayload := fmt.Sprintf("%s:%s:%x", headers[HeaderDIDTimestamp], headers[HeaderDIDNonce], expectedHash)
 
 		// Decode signature and verify it was signed over the expected payload
 		sigBytes, err := base64.StdEncoding.DecodeString(headers[HeaderDIDSignature])
@@ -256,6 +257,20 @@ func TestDIDSignRequest(t *testing.T) {
 		assert.NotEqual(t, headers1[HeaderDIDSignature], headers2[HeaderDIDSignature])
 	})
 
+	t.Run("same body produces different signatures via nonce", func(t *testing.T) {
+		auth, err := NewDIDAuthenticator(testDID, jwkStr)
+		require.NoError(t, err)
+
+		body := []byte(`{"same":"body"}`)
+		headers1 := auth.SignRequest(body)
+		headers2 := auth.SignRequest(body)
+
+		// Nonces must differ
+		assert.NotEqual(t, headers1[HeaderDIDNonce], headers2[HeaderDIDNonce])
+		// Signatures must differ (even with same body and potentially same timestamp)
+		assert.NotEqual(t, headers1[HeaderDIDSignature], headers2[HeaderDIDSignature])
+	})
+
 	t.Run("empty body is signed correctly", func(t *testing.T) {
 		auth, err := NewDIDAuthenticator(testDID, jwkStr)
 		require.NoError(t, err)
@@ -267,7 +282,7 @@ func TestDIDSignRequest(t *testing.T) {
 		require.NoError(t, err)
 
 		bodyHash := sha256.Sum256([]byte{})
-		payload := fmt.Sprintf("%s:%x", headers[HeaderDIDTimestamp], bodyHash)
+		payload := fmt.Sprintf("%s:%s:%x", headers[HeaderDIDTimestamp], headers[HeaderDIDNonce], bodyHash)
 		assert.True(t, ed25519.Verify(pub, []byte(payload), sigBytes))
 	})
 
@@ -283,7 +298,7 @@ func TestDIDSignRequest(t *testing.T) {
 
 		// sha256.Sum256(nil) produces the hash of zero-length input
 		bodyHash := sha256.Sum256(nil)
-		payload := fmt.Sprintf("%s:%x", headers[HeaderDIDTimestamp], bodyHash)
+		payload := fmt.Sprintf("%s:%s:%x", headers[HeaderDIDTimestamp], headers[HeaderDIDNonce], bodyHash)
 		assert.True(t, ed25519.Verify(pub, []byte(payload), sigBytes))
 	})
 
@@ -406,6 +421,7 @@ func TestDIDSignHTTPRequest(t *testing.T) {
 		assert.Equal(t, testDID, req.Header.Get(HeaderCallerDID))
 		assert.NotEmpty(t, req.Header.Get(HeaderDIDSignature))
 		assert.NotEmpty(t, req.Header.Get(HeaderDIDTimestamp))
+		assert.NotEmpty(t, req.Header.Get(HeaderDIDNonce))
 	})
 
 	t.Run("no-op when DID auth not configured", func(t *testing.T) {
@@ -551,6 +567,9 @@ func TestDIDHeadersInDoMethod(t *testing.T) {
 		ts := r.Header.Get(HeaderDIDTimestamp)
 		assert.NotEmpty(t, ts)
 
+		nonce := r.Header.Get(HeaderDIDNonce)
+		assert.NotEmpty(t, nonce)
+
 		// Verify the signature is valid
 		sigBytes, err := base64.StdEncoding.DecodeString(sig)
 		require.NoError(t, err)
@@ -558,7 +577,7 @@ func TestDIDHeadersInDoMethod(t *testing.T) {
 		// The do() method serializes the body to JSON, so we need to read and
 		// reconstruct the expected hash. The body sent was {"msg":"hello"}.
 		bodyHash := sha256.Sum256([]byte(`{"msg":"hello"}`))
-		payload := fmt.Sprintf("%s:%x", ts, bodyHash)
+		payload := fmt.Sprintf("%s:%s:%x", ts, nonce, bodyHash)
 		assert.True(t, ed25519.Verify(pub, []byte(payload), sigBytes),
 			"server-side signature verification failed")
 
@@ -593,13 +612,16 @@ func TestDIDHeadersInDoMethodWithContext(t *testing.T) {
 		ts := r.Header.Get(HeaderDIDTimestamp)
 		assert.NotEmpty(t, ts)
 
+		nonce := r.Header.Get(HeaderDIDNonce)
+		assert.NotEmpty(t, nonce)
+
 		// Decode signature
 		sigBytes, err := base64.StdEncoding.DecodeString(sig)
 		require.NoError(t, err)
 
 		// Reconstruct payload. The body is json-marshaled by do().
 		bodyHash := sha256.Sum256(capturedBody)
-		payload := fmt.Sprintf("%s:%x", ts, bodyHash)
+		payload := fmt.Sprintf("%s:%s:%x", ts, nonce, bodyHash)
 		assert.True(t, ed25519.Verify(pub, []byte(payload), sigBytes),
 			"server-side signature verification failed")
 

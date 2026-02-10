@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 export const HEADER_CALLER_DID = 'X-Caller-DID';
 export const HEADER_DID_SIGNATURE = 'X-DID-Signature';
 export const HEADER_DID_TIMESTAMP = 'X-DID-Timestamp';
+export const HEADER_DID_NONCE = 'X-DID-Nonce';
 
 /**
  * Ed25519 PKCS#8 DER prefix for wrapping a 32-byte seed into a valid
@@ -44,15 +45,17 @@ export class DIDAuthenticator {
     }
 
     const timestamp = Math.floor(Date.now() / 1000).toString();
+    const nonce = crypto.randomBytes(16).toString('hex');
     const bodyHash = crypto.createHash('sha256').update(body).digest('hex');
-    const payload = `${timestamp}:${bodyHash}`;
+    const payload = `${timestamp}:${nonce}:${bodyHash}`;
     const signature = crypto.sign(null, Buffer.from(payload), this._privateKey!);
     const signatureB64 = signature.toString('base64');
 
     return {
       [HEADER_CALLER_DID]: this._did!,
       [HEADER_DID_SIGNATURE]: signatureB64,
-      [HEADER_DID_TIMESTAMP]: timestamp
+      [HEADER_DID_TIMESTAMP]: timestamp,
+      [HEADER_DID_NONCE]: nonce
     };
   }
 

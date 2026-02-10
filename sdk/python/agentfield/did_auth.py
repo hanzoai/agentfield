@@ -8,6 +8,7 @@ This module handles the creation of DID authentication headers for protected age
 import base64
 import hashlib
 import json
+import os
 import time
 from typing import Dict, Optional, Tuple
 
@@ -19,6 +20,7 @@ logger = get_logger(__name__)
 HEADER_CALLER_DID = "X-Caller-DID"
 HEADER_DID_SIGNATURE = "X-DID-Signature"
 HEADER_DID_TIMESTAMP = "X-DID-Timestamp"
+HEADER_DID_NONCE = "X-DID-Nonce"
 
 
 def _load_ed25519_private_key(private_key_jwk: str):
@@ -77,8 +79,9 @@ def sign_request(
     """
     Sign a request body for DID authentication.
 
-    Creates the signature payload as "{timestamp}:{sha256(body)}" and signs it
-    with the Ed25519 private key.
+    Creates the signature payload as "{timestamp}:{nonce}:{sha256(body)}" and signs it
+    with the Ed25519 private key. The nonce ensures each signature is unique even when
+    the same body is signed within the same second.
 
     Args:
         body: Request body bytes to sign
@@ -86,7 +89,7 @@ def sign_request(
         did: Caller's DID identifier
 
     Returns:
-        Tuple of (signature_base64, timestamp_str, did)
+        Tuple of (signature_base64, timestamp_str, nonce, did)
 
     Raises:
         ImportError: If cryptography library is not installed
@@ -98,11 +101,16 @@ def sign_request(
     # Get current timestamp
     timestamp = str(int(time.time()))
 
+    # Generate per-request nonce to prevent replay detection when
+    # multiple requests have the same body within the same second
+    # (Ed25519 is deterministic, so same payload = same signature)
+    nonce = os.urandom(16).hex()
+
     # Hash the body
     body_hash = hashlib.sha256(body).hexdigest()
 
-    # Create payload: "{timestamp}:{body_hash}"
-    payload = f"{timestamp}:{body_hash}".encode("utf-8")
+    # Create payload: "{timestamp}:{nonce}:{body_hash}"
+    payload = f"{timestamp}:{nonce}:{body_hash}".encode("utf-8")
 
     # Sign the payload
     signature = private_key.sign(payload)
@@ -110,7 +118,7 @@ def sign_request(
     # Encode signature as base64
     signature_b64 = base64.b64encode(signature).decode("ascii")
 
-    return signature_b64, timestamp, did
+    return signature_b64, timestamp, nonce, did
 
 
 def create_did_auth_headers(
@@ -133,12 +141,13 @@ def create_did_auth_headers(
         ImportError: If cryptography library is not installed
         ValueError: If key format is invalid
     """
-    signature, timestamp, caller_did = sign_request(body, private_key_jwk, did)
+    signature, timestamp, nonce, caller_did = sign_request(body, private_key_jwk, did)
 
     return {
         HEADER_CALLER_DID: caller_did,
         HEADER_DID_SIGNATURE: signature,
         HEADER_DID_TIMESTAMP: timestamp,
+        HEADER_DID_NONCE: nonce,
     }
 
 

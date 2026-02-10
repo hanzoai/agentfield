@@ -501,7 +501,9 @@ func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *ser
 		// The health monitor will determine the actual status based on heartbeats
 		newNode.HealthStatus = types.HealthStatusUnknown
 
-		// Handle lifecycle status for re-registrations vs new registrations
+		// Handle lifecycle status for re-registrations vs new registrations.
+		// Re-registrations always reset to starting so tag approval rules are
+		// re-evaluated (rules may have changed since last registration).
 		if isReRegistration {
 			// Detect admin revocation: pending_approval with nil/empty approved tags
 			// means an admin explicitly revoked this agent's tags. In that case,
@@ -511,10 +513,9 @@ func RegisterNodeHandler(storageProvider storage.StorageProvider, uiService *ser
 
 			if adminRevoked {
 				newNode.LifecycleStatus = types.AgentStatusPendingApproval
-			} else if newNode.LifecycleStatus == "" && existingNode.LifecycleStatus != "" {
-				// Preserve existing lifecycle status (e.g. ready) for seamless reconnection
-				newNode.LifecycleStatus = existingNode.LifecycleStatus
 			} else if newNode.LifecycleStatus == "" {
+				// Reset to starting so tag approval service re-evaluates tags.
+				// This prevents inheriting stale approval state if rules changed.
 				newNode.LifecycleStatus = types.AgentStatusStarting
 			}
 		} else {

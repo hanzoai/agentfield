@@ -552,8 +552,7 @@ func (a *Agent) Initialize(ctx context.Context) error {
 		return errors.New("no reasoners registered")
 	}
 
-	wasPendingApproval, err := a.registerNode(ctx)
-	if err != nil {
+	if err := a.registerNode(ctx); err != nil {
 		return fmt.Errorf("register node: %w", err)
 	}
 
@@ -564,13 +563,12 @@ func (a *Agent) Initialize(ctx context.Context) error {
 		}
 	}
 
-	// Only mark ready if the agent was NOT in pending_approval.
-	// Agents that went through tag approval are already transitioned to starting/ready
-	// by the admin approval process — calling markReady here would override that.
-	if !wasPendingApproval {
-		if err := a.markReady(ctx); err != nil {
-			a.logger.Printf("warn: initial status update failed: %v", err)
-		}
+	// Mark agent as ready. The control plane protects pending_approval state
+	// (returns 409 if still pending), so this is safe to call unconditionally.
+	// For agents that went through tag approval, the admin process transitions
+	// them to "starting" first, so markReady correctly advances to "ready".
+	if err := a.markReady(ctx); err != nil {
+		a.logger.Printf("warn: initial status update failed: %v", err)
 	}
 
 	a.startLeaseLoop()
@@ -615,7 +613,7 @@ func (a *Agent) Serve(ctx context.Context) error {
 	}
 }
 
-func (a *Agent) registerNode(ctx context.Context) (wasPendingApproval bool, err error) {
+func (a *Agent) registerNode(ctx context.Context) error {
 	now := time.Now().UTC()
 
 	reasoners := make([]types.ReasonerDefinition, 0, len(a.reasoners))
@@ -659,21 +657,21 @@ func (a *Agent) registerNode(ctx context.Context) (wasPendingApproval bool, err 
 
 	resp, err := a.client.RegisterNode(ctx, payload)
 	if err != nil {
-		return false, err
+		return err
 	}
 
 	// Handle pending approval state: poll until approved
 	if resp != nil && resp.Status == "pending_approval" {
 		a.logger.Printf("node %s registered but awaiting tag approval (pending tags: %v)", a.cfg.NodeID, resp.PendingTags)
 		if err := a.waitForApproval(ctx); err != nil {
-			return true, fmt.Errorf("tag approval wait failed: %w", err)
+			return fmt.Errorf("tag approval wait failed: %w", err)
 		}
 		a.logger.Printf("node %s tag approval granted", a.cfg.NodeID)
-		return true, nil
+		return nil
 	}
 
 	a.logger.Printf("node %s registered with AgentField", a.cfg.NodeID)
-	return false, nil
+	return nil
 }
 
 func (a *Agent) waitForApproval(ctx context.Context) error {
@@ -1826,6 +1824,10 @@ func (a *Agent) maybeGenerateVC(
 ) {
 	if !a.shouldGenerateVC(reasoner) {
 		return
+	}
+
+	if execCtx.CallerDID == "" {
+		a.logger.Printf("⚠️ VC generation for %s: CallerDID is empty (anonymous caller?), control plane will use fallback DID", execCtx.ExecutionID)
 	}
 
 	didExecCtx := did.ExecutionContext{

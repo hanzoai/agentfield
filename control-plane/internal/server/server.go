@@ -1399,9 +1399,11 @@ func (s *AgentFieldServer) setupRoutes() {
 			logger.Logger.Info().Msg("🚫 Revocation list endpoint registered (GET /api/v1/revocations)")
 		}
 
-		// Admin public key endpoint — agents use this for offline VC signature verification
+		// Issuer public key endpoint — agents use this for offline VC signature verification.
+		// Registered at /did/issuer-public-key (public, semantic path) and
+		// /admin/public-key (legacy alias for backward compatibility).
 		if s.didService != nil {
-			agentAPI.GET("/admin/public-key", func(c *gin.Context) {
+			publicKeyHandler := func(c *gin.Context) {
 				issuerDID, err := s.didService.GetControlPlaneIssuerDID()
 				if err != nil {
 					c.JSON(http.StatusInternalServerError, gin.H{
@@ -1431,8 +1433,10 @@ func (s *AgentFieldServer) setupRoutes() {
 					"public_key_jwk": publicKeyJWK,
 					"fetched_at":     time.Now().UTC().Format(time.RFC3339),
 				})
-			})
-			logger.Logger.Info().Msg("🔑 Admin public key endpoint registered (GET /api/v1/admin/public-key)")
+			}
+			agentAPI.GET("/did/issuer-public-key", publicKeyHandler)
+			agentAPI.GET("/admin/public-key", publicKeyHandler) // legacy alias
+			logger.Logger.Info().Msg("🔑 Issuer public key endpoint registered (GET /api/v1/did/issuer-public-key)")
 		}
 
 		// Settings API routes (observability webhook configuration)

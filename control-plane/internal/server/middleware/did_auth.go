@@ -162,6 +162,7 @@ func DIDAuthMiddleware(didService DIDWebServiceInterface, config DIDAuthConfig) 
 		callerDID := c.GetHeader("X-Caller-DID")
 		signature := c.GetHeader("X-DID-Signature")
 		timestamp := c.GetHeader("X-DID-Timestamp")
+		nonce := c.GetHeader("X-DID-Nonce")
 
 		// If no DID claimed, proceed without DID auth
 		// This allows unauthenticated requests when DID is optional
@@ -229,9 +230,16 @@ func DIDAuthMiddleware(didService DIDWebServiceInterface, config DIDAuthConfig) 
 		// Restore body for downstream handlers
 		c.Request.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
-		// Build verification payload: timestamp:SHA256(body)
+		// Build verification payload: timestamp[:nonce]:SHA256(body)
+		// When X-DID-Nonce header is present, include it in the payload to match
+		// the signing format used by SDKs (prevents replay with deterministic Ed25519)
 		bodyHash := sha256.Sum256(bodyBytes)
-		payload := fmt.Sprintf("%s:%x", timestamp, bodyHash)
+		var payload string
+		if nonce != "" {
+			payload = fmt.Sprintf("%s:%s:%x", timestamp, nonce, bodyHash)
+		} else {
+			payload = fmt.Sprintf("%s:%x", timestamp, bodyHash)
+		}
 
 		// Decode base64 signature
 		sigBytes, err := base64.StdEncoding.DecodeString(signature)
