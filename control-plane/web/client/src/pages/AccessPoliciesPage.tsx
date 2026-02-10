@@ -24,7 +24,7 @@ import * as policiesApi from "../services/accessPoliciesApi";
 import type { AccessPolicy, AccessPolicyRequest } from "../services/accessPoliciesApi";
 import { AdminTokenPrompt } from "../components/AdminTokenPrompt";
 
-const GRID_TEMPLATE = "minmax(140px,1.5fr) minmax(120px,1.2fr) minmax(120px,1.2fr) 80px 70px 100px";
+const GRID_TEMPLATE = "minmax(180px,2fr) minmax(140px,1.5fr) minmax(140px,1.5fr) 90px 80px 110px";
 
 const emptyPolicy: AccessPolicyRequest = {
   name: "",
@@ -178,10 +178,10 @@ export function AccessPoliciesPage() {
       sortable: true,
       align: "left" as const,
       render: (item: AccessPolicy) => (
-        <div className="min-w-0">
-          <div className="font-medium text-sm truncate">{item.name}</div>
+        <div className="min-w-0 py-1">
+          <div className="font-medium text-sm truncate leading-tight">{item.name}</div>
           {item.description && (
-            <div className="text-xs text-muted-foreground truncate">{item.description}</div>
+            <div className="text-xs text-muted-foreground truncate leading-tight mt-0.5">{item.description}</div>
           )}
         </div>
       ),
@@ -306,10 +306,8 @@ export function AccessPoliciesPage() {
         </Alert>
       )}
 
-      {/* Admin token prompt when forbidden */}
-      {error && error.toLowerCase().includes("forbidden") && (
-        <AdminTokenPrompt onTokenSet={fetchPolicies} />
-      )}
+      {/* Admin token prompt — always visible when no token is set */}
+      <AdminTokenPrompt onTokenSet={fetchPolicies} />
 
       {/* Stats */}
       <div className="text-sm text-muted-foreground">
@@ -329,6 +327,7 @@ export function AccessPoliciesPage() {
           onSortChange={handleSortChange}
           gridTemplate={GRID_TEMPLATE}
           getRowKey={(item) => String(item.id)}
+          rowHeight={48}
           emptyState={{
             title: "No access policies",
             description: "Create a policy to enable tag-based authorization for cross-agent calls.",

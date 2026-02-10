@@ -131,9 +131,8 @@ export function TagApprovalPage() {
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
-      {error && error.toLowerCase().includes("forbidden") && (
-        <AdminTokenPrompt onTokenSet={fetchAgents} />
-      )}
+      {/* Admin token prompt — always visible when no token is set */}
+      <AdminTokenPrompt onTokenSet={fetchAgents} />
       {success && (
         <Alert>
           <CheckCircle className="h-4 w-4" />
