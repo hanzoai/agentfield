@@ -49,6 +49,22 @@ func NodeStatusLeaseHandler(storageProvider storage.StorageProvider, statusManag
 			return
 		}
 
+		// Protect pending_approval from being overwritten by agent status updates.
+		// Skip all status changes — only renew the lease heartbeat timestamp.
+		if agent.LifecycleStatus == types.AgentStatusPendingApproval {
+			logger.Logger.Debug().Str("node_id", nodeID).Msg("ignoring status update: agent is pending_approval")
+			now := time.Now().UTC()
+			_ = storageProvider.UpdateAgentHeartbeat(ctx, nodeID, now)
+			if presenceManager != nil {
+				presenceManager.Touch(nodeID, now)
+			}
+			c.JSON(http.StatusOK, gin.H{
+				"lease_seconds":      int(leaseTTL.Seconds()),
+				"next_lease_renewal": now.Add(leaseTTL).Format(time.RFC3339),
+			})
+			return
+		}
+
 		update := &types.AgentStatusUpdate{
 			Source: types.StatusSourceManual,
 		}

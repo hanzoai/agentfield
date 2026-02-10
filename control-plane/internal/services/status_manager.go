@@ -177,13 +177,27 @@ func (sm *StatusManager) GetAgentStatus(ctx context.Context, nodeID string) (*ty
 
 		// Create status based on health check result
 		now := time.Now()
+
+		// Preserve admin-controlled lifecycle status (e.g., pending_approval) from storage.
+		// Live health checks prove liveness but must not override admin decisions.
+		var preservedLifecycle types.AgentLifecycleStatus
+		if agent, agentErr := sm.storage.GetAgent(ctx, nodeID); agentErr == nil && agent != nil {
+			if agent.LifecycleStatus == types.AgentStatusPendingApproval {
+				preservedLifecycle = types.AgentStatusPendingApproval
+			}
+		}
+
 		if healthCheckSuccessful && agentStatusResp.Status == "running" {
+			lifecycle := types.AgentStatusReady
+			if preservedLifecycle == types.AgentStatusPendingApproval {
+				lifecycle = types.AgentStatusPendingApproval
+			}
 			// Agent is active and running
 			status = &types.AgentStatus{
 				State:           types.AgentStateActive,
 				HealthScore:     85, // Good health from live verification
 				LastSeen:        now,
-				LifecycleStatus: types.AgentStatusReady,
+				LifecycleStatus: lifecycle,
 				HealthStatus:    types.HealthStatusActive,
 				LastUpdated:     now,
 				LastVerified:    &now, // Set when live health check was performed
@@ -284,6 +298,26 @@ func (sm *StatusManager) GetAgentStatusSnapshot(ctx context.Context, nodeID stri
 
 // UpdateAgentStatus updates the agent status with reconciliation
 func (sm *StatusManager) UpdateAgentStatus(ctx context.Context, nodeID string, update *types.AgentStatusUpdate) error {
+	// Protect pending_approval from non-admin updates. The tag approval service
+	// transitions agents out of pending_approval by modifying storage directly
+	// (not through UpdateAgentStatus). Therefore ALL updates flowing through this
+	// method must be blocked when the agent is pending_approval, to prevent
+	// heartbeats, health checks, lease renewals, and transition timeouts from
+	// overriding the admin-controlled state.
+	if agent, agentErr := sm.storage.GetAgent(ctx, nodeID); agentErr == nil && agent != nil {
+		if agent.LifecycleStatus == types.AgentStatusPendingApproval {
+			// Allow health score cache updates, but not lifecycle/state changes
+			if update.HealthScore != nil {
+				sm.cacheMutex.Lock()
+				if cached, exists := sm.statusCache[nodeID]; exists && cached.Status != nil {
+					cached.Status.HealthScore = *update.HealthScore
+				}
+				sm.cacheMutex.Unlock()
+			}
+			return nil
+		}
+	}
+
 	// Get current status using snapshot (no live health check) to preserve the true "old" state
 	// for event broadcasting. Using GetAgentStatus here would perform a live health check,
 	// which could return the same state as the update, causing oldStatus == newStatus
@@ -380,7 +414,8 @@ func (sm *StatusManager) UpdateAgentStatus(ctx context.Context, nodeID string, u
 	return nil
 }
 
-// UpdateFromHeartbeat updates status based on heartbeat data
+// UpdateFromHeartbeat updates status based on heartbeat data.
+// Uses snapshot (not live health check) to avoid overriding admin-controlled states.
 func (sm *StatusManager) UpdateFromHeartbeat(ctx context.Context, nodeID string, lifecycleStatus *types.AgentLifecycleStatus, mcpStatus *types.MCPStatusInfo) error {
 	currentStatus, err := sm.GetAgentStatus(ctx, nodeID)
 	if err != nil {
@@ -398,12 +433,28 @@ func (sm *StatusManager) UpdateFromHeartbeat(ctx context.Context, nodeID string,
 	// Update from heartbeat
 	currentStatus.UpdateFromHeartbeat(lifecycleStatus, mcpStatus)
 
-	// Persist changes
+	// Persist changes — derive State from lifecycle so UpdateAgentStatus keeps them in sync.
 	update := &types.AgentStatusUpdate{
 		LifecycleStatus: lifecycleStatus,
 		MCPStatus:       mcpStatus,
 		Source:          types.StatusSourceHeartbeat,
 		Reason:          "heartbeat update",
+	}
+	if lifecycleStatus != nil {
+		var derivedState types.AgentState
+		switch *lifecycleStatus {
+		case types.AgentStatusReady:
+			derivedState = types.AgentStateActive
+		case types.AgentStatusStarting:
+			derivedState = types.AgentStateStarting
+		case types.AgentStatusDegraded:
+			derivedState = types.AgentStateActive
+		case types.AgentStatusOffline:
+			derivedState = types.AgentStateInactive
+		}
+		if derivedState != "" {
+			update.State = &derivedState
+		}
 	}
 
 	return sm.UpdateAgentStatus(ctx, nodeID, update)
@@ -739,9 +790,12 @@ func (sm *StatusManager) checkTransitionTimeouts() {
 				Dur("duration", now.Sub(transition.StartedAt)).
 				Msg("🔄 Transition timeout, forcing completion")
 
-			// Force complete the transition
+			// Force complete the transition, but not if the agent is now pending_approval
+			// (e.g., tags were revoked while a transition was in progress).
 			ctx := context.Background()
-			if status, err := sm.GetAgentStatus(ctx, nodeID); err == nil {
+			if agent, agentErr := sm.storage.GetAgent(ctx, nodeID); agentErr == nil && agent != nil && agent.LifecycleStatus == types.AgentStatusPendingApproval {
+				logger.Logger.Debug().Str("node_id", nodeID).Msg("cancelling stale transition: agent is pending_approval")
+			} else if status, err := sm.GetAgentStatus(ctx, nodeID); err == nil {
 				status.CompleteTransition()
 				if err := sm.persistStatus(ctx, nodeID, status); err != nil {
 					logger.Logger.Warn().
