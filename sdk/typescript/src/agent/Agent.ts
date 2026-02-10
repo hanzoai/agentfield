@@ -448,6 +448,11 @@ export class Agent {
       const verifier = this.localVerifier;
       const realtimeFunctions = this.realtimeValidationFunctions;
 
+      // Rate limiter for auth endpoints: max 30 failed attempts per IP per 60s window
+      const authAttempts = new Map<string, number[]>();
+      const AUTH_RATE_LIMIT = 30;
+      const AUTH_RATE_WINDOW_MS = 60_000;
+
       this.app.use(async (req, res, next) => {
         const path = req.path;
 
@@ -466,6 +471,19 @@ export class Agent {
         if (realtimeFunctions.has(funcName)) {
           return next();
         }
+
+        // Rate limit auth attempts per IP
+        const clientIp = req.ip ?? req.socket.remoteAddress ?? 'unknown';
+        const now = Date.now();
+        const attempts = (authAttempts.get(clientIp) ?? []).filter((t) => now - t < AUTH_RATE_WINDOW_MS);
+        if (attempts.length >= AUTH_RATE_LIMIT) {
+          return res.status(429).json({
+            error: 'rate_limit_exceeded',
+            message: 'Too many authentication attempts. Try again later.',
+          });
+        }
+        attempts.push(now);
+        authAttempts.set(clientIp, attempts);
 
         // Refresh cache if stale (non-blocking but log errors)
         if (verifier.needsRefresh) {
