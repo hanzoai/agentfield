@@ -389,8 +389,17 @@ class AgentAI:
         litellm_params["messages"] = messages
 
         if schema:
-            # Use LiteLLM's native Pydantic model support for structured outputs
-            litellm_params["response_format"] = schema
+            # Convert Pydantic model to JSON schema format for LiteLLM
+            # This workaround prevents "Object of type ModelMetaclass is not JSON serializable" error
+            # See: https://github.com/BerriAI/litellm/issues/6830
+            litellm_params["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "schema": schema.model_json_schema(),
+                    "name": schema.__name__,
+                    "strict": True
+                }
+            }
 
         # Define the LiteLLM call function for rate limiter
         async def _make_litellm_call():
