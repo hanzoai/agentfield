@@ -22,6 +22,7 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/internal/events"                     // Event system
 	"github.com/Agent-Field/agentfield/control-plane/internal/handlers"                   // Agent handlers
 	"github.com/Agent-Field/agentfield/control-plane/internal/handlers/admin"             // Admin handlers
+	connectorpkg "github.com/Agent-Field/agentfield/control-plane/internal/handlers/connector" // Connector handlers
 	"github.com/Agent-Field/agentfield/control-plane/internal/handlers/ui"                // UI handlers
 	"github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/communication"
 	"github.com/Agent-Field/agentfield/control-plane/internal/infrastructure/process"
@@ -1470,6 +1471,23 @@ func (s *AgentFieldServer) setupRoutes() {
 			}
 
 			logger.Logger.Info().Msg("📋 Authorization admin routes registered")
+		}
+
+		// Connector routes (authenticated with separate connector token)
+		if s.config.Features.Connector.Enabled && s.config.Features.Connector.Token != "" {
+			connectorGroup := agentAPI.Group("/connector")
+			connectorGroup.Use(middleware.ConnectorTokenAuth(s.config.Features.Connector.Token))
+
+			connectorHandlers := connectorpkg.NewHandlers(
+				s.config.Features.Connector,
+				s.storage,
+				s.accessPolicyService,
+				s.tagApprovalService,
+				s.didService,
+			)
+			connectorHandlers.RegisterRoutes(connectorGroup)
+
+			logger.Logger.Info().Msg("🔌 Connector routes registered")
 		}
 	}
 

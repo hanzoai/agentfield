@@ -5,6 +5,7 @@ import (
 	"os"            // Added for os.Stat, os.ReadFile
 	"path/filepath" // Added for filepath.Join
 	"strconv"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3" // Added for yaml.Unmarshal
@@ -69,7 +70,21 @@ type ExecutionQueueConfig struct {
 
 // FeatureConfig holds configuration for enabling/disabling features.
 type FeatureConfig struct {
-	DID DIDConfig `yaml:"did" mapstructure:"did"`
+	DID       DIDConfig       `yaml:"did" mapstructure:"did"`
+	Connector ConnectorConfig `yaml:"connector" mapstructure:"connector"`
+}
+
+// ConnectorConfig holds configuration for the connector service integration.
+type ConnectorConfig struct {
+	Enabled      bool                              `yaml:"enabled" mapstructure:"enabled"`
+	Token        string                            `yaml:"token" mapstructure:"token"`
+	Capabilities map[string]ConnectorCapability     `yaml:"capabilities" mapstructure:"capabilities"`
+}
+
+// ConnectorCapability defines whether a capability domain is enabled and its access mode.
+type ConnectorCapability struct {
+	Enabled  bool `yaml:"enabled" mapstructure:"enabled"`
+	ReadOnly bool `yaml:"read_only" mapstructure:"read_only"`
 }
 
 // DIDConfig holds configuration for DID identity system.
@@ -290,5 +305,37 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if val := os.Getenv("AGENTFIELD_AUTHORIZATION_INTERNAL_TOKEN"); val != "" {
 		cfg.Features.DID.Authorization.InternalToken = val
+	}
+
+	// Connector overrides
+	if val := os.Getenv("AGENTFIELD_CONNECTOR_ENABLED"); val != "" {
+		cfg.Features.Connector.Enabled = val == "true" || val == "1"
+	}
+	if val := os.Getenv("AGENTFIELD_CONNECTOR_TOKEN"); val != "" {
+		cfg.Features.Connector.Token = val
+	}
+	// Connector capability overrides (true / false / readonly)
+	connectorCapEnvMap := map[string]string{
+		"AGENTFIELD_CONNECTOR_CAP_POLICY_MANAGEMENT":   "policy_management",
+		"AGENTFIELD_CONNECTOR_CAP_TAG_MANAGEMENT":      "tag_management",
+		"AGENTFIELD_CONNECTOR_CAP_DID_MANAGEMENT":      "did_management",
+		"AGENTFIELD_CONNECTOR_CAP_REASONER_MANAGEMENT": "reasoner_management",
+		"AGENTFIELD_CONNECTOR_CAP_STATUS_READ":          "status_read",
+		"AGENTFIELD_CONNECTOR_CAP_OBSERVABILITY_CONFIG": "observability_config",
+	}
+	for envKey, capName := range connectorCapEnvMap {
+		if val := os.Getenv(envKey); val != "" {
+			if cfg.Features.Connector.Capabilities == nil {
+				cfg.Features.Connector.Capabilities = make(map[string]ConnectorCapability)
+			}
+			switch strings.ToLower(val) {
+			case "true":
+				cfg.Features.Connector.Capabilities[capName] = ConnectorCapability{Enabled: true, ReadOnly: false}
+			case "readonly":
+				cfg.Features.Connector.Capabilities[capName] = ConnectorCapability{Enabled: true, ReadOnly: true}
+			default:
+				cfg.Features.Connector.Capabilities[capName] = ConnectorCapability{Enabled: false}
+			}
+		}
 	}
 }

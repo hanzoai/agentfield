@@ -117,3 +117,22 @@ features:
               value: 10000
           action: "allow"
           priority: 90
+  connector:
+    enabled: true
+    token: "test-connector-token-123"
+    capabilities:
+      policy_management:
+        enabled: true
+        read_only: false
+      tag_management:
+        enabled: true
+        read_only: false
+      did_management:
+        enabled: false
+      reasoner_management:
+        enabled: true
+        read_only: true
+      status_read:
+        enabled: true
+      observability_config:
+        enabled: false
