@@ -10,7 +10,7 @@ import type { Node, Edge, Viewport, XYPosition } from '@xyflow/react';
 import type { Bot, BotView } from '@/types/canvas';
 import { NODE_TYPES } from '@/types/canvas';
 
-const STORAGE_KEY_PREFIX = 'bot-canvas';
+const STORAGE_KEY_PREFIX = 'playground';
 const DEFAULT_VIEWPORT: Viewport = { x: 0, y: 0, zoom: 0.8 };
 
 /** Tenant-scoped storage key to prevent cross-tenant data leaks */

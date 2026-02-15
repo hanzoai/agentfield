@@ -2,9 +2,9 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ include "agentfield.controlPlane.fullname" . }}
+  name: {{ include "playground.controlPlane.fullname" . }}
   labels:
-    {{- include "agentfield.labels" . | nindent 4 }}
+    {{- include "playground.labels" . | nindent 4 }}
   {{- with .Values.controlPlane.ingress.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -27,7 +27,7 @@ spec:
             pathType: {{ .pathType | default "Prefix" }}
             backend:
               service:
-                name: {{ include "agentfield.controlPlane.fullname" $ }}
+                name: {{ include "playground.controlPlane.fullname" $ }}
                 port:
                   number: {{ $.Values.controlPlane.service.port }}
           {{- end }}

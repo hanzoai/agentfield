@@ -106,7 +106,7 @@ export function SidebarNew({ sections }: SidebarNewProps) {
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton asChild tooltip="Documentation">
-              <a href="https://agentfield.ai/docs" target="_blank" rel="noopener noreferrer">
+              <a href="https://hanzo.ai/docs" target="_blank" rel="noopener noreferrer">
                 <Icon name="documentation" size={15} className="text-muted-foreground" />
                 <span>Documentation</span>
               </a>
@@ -114,7 +114,7 @@ export function SidebarNew({ sections }: SidebarNewProps) {
           </SidebarMenuItem>
           <SidebarMenuItem>
             <SidebarMenuButton asChild tooltip="GitHub">
-              <a href="https://github.com/Agent-Field/agentfield" target="_blank" rel="noopener noreferrer">
+              <a href="https://github.com/hanzoai/playground" target="_blank" rel="noopener noreferrer">
                 <Icon name="github" size={15} className="text-muted-foreground" />
                 <span>GitHub</span>
               </a>
@@ -122,7 +122,7 @@ export function SidebarNew({ sections }: SidebarNewProps) {
           </SidebarMenuItem>
           <SidebarMenuItem>
             <SidebarMenuButton asChild tooltip="Support">
-              <a href="https://github.com/Agent-Field/agentfield/issues" target="_blank" rel="noopener noreferrer">
+              <a href="https://github.com/hanzoai/playground/issues" target="_blank" rel="noopener noreferrer">
                 <Icon name="support" size={15} className="text-muted-foreground" />
                 <span>Support</span>
               </a>

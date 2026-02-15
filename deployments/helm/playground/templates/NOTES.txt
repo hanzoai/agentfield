@@ -1,10 +1,10 @@
-AgentField is installed.
+Hanzo Playground is installed.
 
 Control plane service:
-  {{ include "agentfield.controlPlane.fullname" . }}:{{ .Values.controlPlane.service.port }}
+  {{ include "playground.controlPlane.fullname" . }}:{{ .Values.controlPlane.service.port }}
 
 Port-forward to access the UI locally:
-  kubectl port-forward svc/{{ include "agentfield.controlPlane.fullname" . }} {{ .Values.controlPlane.service.port }}:{{ .Values.controlPlane.service.port }}
+  kubectl port-forward svc/{{ include "playground.controlPlane.fullname" . }} {{ .Values.controlPlane.service.port }}:{{ .Values.controlPlane.service.port }}
 
 Then open:
   http://localhost:{{ .Values.controlPlane.service.port }}/ui/

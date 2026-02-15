@@ -2,20 +2,20 @@
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: {{ include "agentfield.postgres.fullname" . }}
+  name: {{ include "playground.postgres.fullname" . }}
   labels:
-    {{- include "agentfield.labels" . | nindent 4 }}
+    {{- include "playground.labels" . | nindent 4 }}
 spec:
-  serviceName: {{ include "agentfield.postgres.fullname" . }}
+  serviceName: {{ include "playground.postgres.fullname" . }}
   replicas: 1
   selector:
     matchLabels:
-      {{- include "agentfield.selectorLabels" . | nindent 6 }}
+      {{- include "playground.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: postgres
   template:
     metadata:
       labels:
-        {{- include "agentfield.selectorLabels" . | nindent 8 }}
+        {{- include "playground.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: postgres
     spec:
       {{- if not .Values.postgres.persistence.enabled }}
@@ -34,17 +34,17 @@ spec:
             - name: POSTGRES_USER
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "agentfield.postgres.secretName" . }}
+                  name: {{ include "playground.postgres.secretName" . }}
                   key: {{ .Values.postgres.auth.existingSecretUsernameKey }}
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "agentfield.postgres.secretName" . }}
+                  name: {{ include "playground.postgres.secretName" . }}
                   key: {{ .Values.postgres.auth.existingSecretPasswordKey }}
             - name: POSTGRES_DB
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "agentfield.postgres.secretName" . }}
+                  name: {{ include "playground.postgres.secretName" . }}
                   key: {{ .Values.postgres.auth.existingSecretDatabaseKey }}
           volumeMounts:
             - name: data
@@ -64,7 +64,7 @@ spec:
     - metadata:
         name: data
         labels:
-          {{- include "agentfield.labels" . | nindent 10 }}
+          {{- include "playground.labels" . | nindent 10 }}
       spec:
         accessModes:
           {{- toYaml .Values.postgres.persistence.accessModes | nindent 10 }}

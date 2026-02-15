@@ -2,7 +2,7 @@ controlPlane:
   replicaCount: 1
 
   image:
-    repository: agentfield/control-plane
+    repository: playground/control-plane
     tag: latest
     pullPolicy: IfNotPresent
 
@@ -20,7 +20,7 @@ controlPlane:
     tls: []
 
   storage:
-    # local (SQLite/Bolt under AGENTFIELD_HOME) or postgres
+    # local (SQLite/Bolt under PLAYGROUND_HOME) or postgres
     mode: local
     # If mode=postgres and this is empty, and postgres.enabled=true, the chart will auto-wire it.
     postgresUrl: ""
@@ -68,9 +68,9 @@ postgres:
     tag: pg16
     pullPolicy: IfNotPresent
   auth:
-    username: agentfield
-    password: agentfield
-    database: agentfield
+    username: playground
+    password: playground
+    database: playground
     existingSecret: ""
     existingSecretUsernameKey: username
     existingSecretPasswordKey: password
@@ -86,7 +86,7 @@ demoAgent:
   enabled: false
   image:
     # Build locally from deployments/docker/Dockerfile.demo-go-agent and push/load into your cluster.
-    repository: agentfield-demo-go-agent
+    repository: playground-demo-go-agent
     tag: local
     pullPolicy: IfNotPresent
   nodeId: demo-go-agent
@@ -102,7 +102,7 @@ demoPythonAgent:
     repository: python
     tag: "3.11-slim"
     pullPolicy: IfNotPresent
-  pipPackage: "agentfield"
+  pipPackage: "playground"
   nodeId: demo-python-agent
   service:
     type: ClusterIP

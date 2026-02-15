@@ -1,14 +1,14 @@
 # Helm (Kubernetes)
 
-This chart installs the AgentField control plane and optional demo agents.
+This chart installs the Hanzo Playground control plane and optional demo agents.
 
 ## Quick start (recommended)
 
 Install with PostgreSQL and the demo Python agent (no custom image required):
 
 ```bash
-helm upgrade --install agentfield deployments/helm/agentfield \
-  -n agentfield --create-namespace \
+helm upgrade --install playground deployments/helm/playground \
+  -n playground --create-namespace \
   --set postgres.enabled=true \
   --set controlPlane.storage.mode=postgres \
   --set demoPythonAgent.enabled=true
@@ -17,13 +17,13 @@ helm upgrade --install agentfield deployments/helm/agentfield \
 Port-forward the UI/API:
 
 ```bash
-kubectl -n agentfield port-forward svc/agentfield-control-plane 8080:8080
+kubectl -n playground port-forward svc/playground-control-plane 8080:8080
 ```
 
 Wait for the demo agent to become ready (first run installs Python deps):
 
 ```bash
-kubectl -n agentfield wait --for=condition=Ready pod -l app.kubernetes.io/component=demo-python-agent --timeout=600s
+kubectl -n playground wait --for=condition=Ready pod -l app.kubernetes.io/component=demo-python-agent --timeout=600s
 ```
 
 Open:
@@ -52,8 +52,8 @@ curl -s http://localhost:8080/api/v1/did/workflow/$run_id/vc-chain | head -c 120
 ### Local storage (SQLite/BoltDB)
 
 ```bash
-helm upgrade --install agentfield deployments/helm/agentfield \
-  -n agentfield --create-namespace \
+helm upgrade --install playground deployments/helm/playground \
+  -n playground --create-namespace \
   --set controlPlane.storage.mode=local
 ```
 
@@ -64,21 +64,21 @@ The Go demo agent is useful, but you must build/push/load an image that your clu
 For Minikube, build and load the default image used by the chart:
 
 ```bash
-docker build -t agentfield-demo-go-agent:local -f deployments/docker/Dockerfile.demo-go-agent .
-minikube image load agentfield-demo-go-agent:local
+docker build -t playground-demo-go-agent:local -f deployments/docker/Dockerfile.demo-go-agent .
+minikube image load playground-demo-go-agent:local
 ```
 
 ```bash
-helm upgrade --install agentfield deployments/helm/agentfield \
-  -n agentfield --create-namespace \
+helm upgrade --install playground deployments/helm/playground \
+  -n playground --create-namespace \
   --set demoAgent.enabled=true
 ```
 
 ## Authentication (optional)
 
 ```bash
-helm upgrade --install agentfield deployments/helm/agentfield \
-  -n agentfield --create-namespace \
+helm upgrade --install playground deployments/helm/playground \
+  -n playground --create-namespace \
   --set apiAuth.enabled=true \
   --set apiAuth.apiKey='change-me'
 ```

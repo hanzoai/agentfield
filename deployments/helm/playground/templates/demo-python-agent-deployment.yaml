@@ -2,19 +2,19 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "agentfield.fullname" . }}-demo-python-agent
+  name: {{ include "playground.fullname" . }}-demo-python-agent
   labels:
-    {{- include "agentfield.labels" . | nindent 4 }}
+    {{- include "playground.labels" . | nindent 4 }}
 spec:
   replicas: 1
   selector:
     matchLabels:
-      {{- include "agentfield.selectorLabels" . | nindent 6 }}
+      {{- include "playground.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: demo-python-agent
   template:
     metadata:
       labels:
-        {{- include "agentfield.selectorLabels" . | nindent 8 }}
+        {{- include "playground.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: demo-python-agent
     spec:
       initContainers:
@@ -25,7 +25,7 @@ spec:
             - sh
             - -c
             - >
-              until curl -sf "http://{{ include "agentfield.controlPlane.fullname" . }}:{{ .Values.controlPlane.service.port }}/api/v1/health" >/dev/null;
+              until curl -sf "http://{{ include "playground.controlPlane.fullname" . }}:{{ .Values.controlPlane.service.port }}/api/v1/health" >/dev/null;
               do echo "waiting for control plane"; sleep 2; done
       containers:
         - name: demo-python-agent
@@ -43,18 +43,18 @@ spec:
               containerPort: {{ .Values.demoPythonAgent.service.port }}
           env:
             - name: AGENTFIELD_URL
-              value: "http://{{ include "agentfield.controlPlane.fullname" . }}:{{ .Values.controlPlane.service.port }}"
+              value: "http://{{ include "playground.controlPlane.fullname" . }}:{{ .Values.controlPlane.service.port }}"
             - name: AGENT_NODE_ID
               value: {{ .Values.demoPythonAgent.nodeId | quote }}
             - name: PORT
               value: {{ .Values.demoPythonAgent.service.port | quote }}
             - name: AGENT_CALLBACK_URL
-              value: "http://{{ include "agentfield.fullname" . }}-demo-python-agent:{{ .Values.demoPythonAgent.service.port }}"
+              value: "http://{{ include "playground.fullname" . }}-demo-python-agent:{{ .Values.demoPythonAgent.service.port }}"
             {{- if .Values.apiAuth.enabled }}
             - name: AGENTFIELD_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "agentfield.apiAuth.secretName" . }}
+                  name: {{ include "playground.apiAuth.secretName" . }}
                   key: {{ .Values.apiAuth.existingSecretKey }}
             {{- end }}
           volumeMounts:
@@ -75,6 +75,6 @@ spec:
       volumes:
         - name: app
           configMap:
-            name: {{ include "agentfield.fullname" . }}-demo-python-agent
+            name: {{ include "playground.fullname" . }}-demo-python-agent
 {{- end }}
 

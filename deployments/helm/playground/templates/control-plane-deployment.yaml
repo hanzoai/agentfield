@@ -1,9 +1,9 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "agentfield.controlPlane.fullname" . }}
+  name: {{ include "playground.controlPlane.fullname" . }}
   labels:
-    {{- include "agentfield.labels" . | nindent 4 }}
+    {{- include "playground.labels" . | nindent 4 }}
   {{- with .Values.controlPlane.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -12,12 +12,12 @@ spec:
   replicas: {{ .Values.controlPlane.replicaCount }}
   selector:
     matchLabels:
-      {{- include "agentfield.selectorLabels" . | nindent 6 }}
+      {{- include "playground.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: control-plane
   template:
     metadata:
       labels:
-        {{- include "agentfield.selectorLabels" . | nindent 8 }}
+        {{- include "playground.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: control-plane
       {{- with .Values.controlPlane.podAnnotations }}
       annotations:
@@ -39,7 +39,7 @@ spec:
             - name: http
               containerPort: {{ .Values.controlPlane.service.port }}
             - name: grpc
-              containerPort: {{ include "agentfield.controlPlane.grpcPort" . }}
+              containerPort: {{ include "playground.controlPlane.grpcPort" . }}
           env:
             - name: AGENTFIELD_PORT
               value: {{ .Values.controlPlane.service.port | quote }}
@@ -48,28 +48,28 @@ spec:
             {{- if eq .Values.controlPlane.storage.mode "postgres" }}
             {{- if .Values.postgres.enabled }}
             - name: AGENTFIELD_STORAGE_POSTGRES_HOST
-              value: {{ include "agentfield.postgres.fullname" . | quote }}
+              value: {{ include "playground.postgres.fullname" . | quote }}
             - name: AGENTFIELD_STORAGE_POSTGRES_PORT
               value: "5432"
             - name: AGENTFIELD_STORAGE_POSTGRES_DATABASE
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "agentfield.postgres.secretName" . }}
+                  name: {{ include "playground.postgres.secretName" . }}
                   key: {{ .Values.postgres.auth.existingSecretDatabaseKey }}
             - name: AGENTFIELD_STORAGE_POSTGRES_USER
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "agentfield.postgres.secretName" . }}
+                  name: {{ include "playground.postgres.secretName" . }}
                   key: {{ .Values.postgres.auth.existingSecretUsernameKey }}
             - name: AGENTFIELD_STORAGE_POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "agentfield.postgres.secretName" . }}
+                  name: {{ include "playground.postgres.secretName" . }}
                   key: {{ .Values.postgres.auth.existingSecretPasswordKey }}
             - name: AGENTFIELD_STORAGE_POSTGRES_SSLMODE
               value: "disable"
             {{- else }}
-            {{- $postgresUrl := include "agentfield.controlPlane.postgresUrl" . }}
+            {{- $postgresUrl := include "playground.controlPlane.postgresUrl" . }}
             - name: AGENTFIELD_STORAGE_POSTGRES_URL
               value: {{ required "controlPlane.storage.postgresUrl is required when controlPlane.storage.mode=postgres and postgres.enabled=false" $postgresUrl | quote }}
             - name: AGENTFIELD_POSTGRES_URL
@@ -84,7 +84,7 @@ spec:
             - name: AGENTFIELD_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "agentfield.apiAuth.secretName" . }}
+                  name: {{ include "playground.apiAuth.secretName" . }}
                   key: {{ .Values.apiAuth.existingSecretKey }}
             {{- end }}
             {{- with .Values.controlPlane.extraEnv }}
@@ -121,7 +121,7 @@ spec:
         - name: data
           {{- if .Values.controlPlane.persistence.enabled }}
           persistentVolumeClaim:
-            claimName: {{ default (printf "%s-data" (include "agentfield.controlPlane.fullname" .)) .Values.controlPlane.persistence.existingClaim }}
+            claimName: {{ default (printf "%s-data" (include "playground.controlPlane.fullname" .)) .Values.controlPlane.persistence.existingClaim }}
           {{- else }}
           emptyDir: {}
           {{- end }}

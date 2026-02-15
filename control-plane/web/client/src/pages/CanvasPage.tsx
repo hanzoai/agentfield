@@ -1,5 +1,5 @@
 /**
- * CanvasPage
+ * CanvasPage (Playground)
  *
  * Full-bleed infinite canvas for bot orchestration.
  * Responsive: sidebar panel on desktop, drawer on mobile.
@@ -77,7 +77,7 @@ export function CanvasPage() {
             <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
               <div className="flex flex-col items-center gap-3 text-center pointer-events-auto px-4">
                 <div className="text-4xl">🤖</div>
-                <h2 className="text-lg font-semibold">Agent Canvas</h2>
+                <h2 className="text-lg font-semibold">Hanzo Playground</h2>
                 <p className="text-sm text-muted-foreground max-w-xs">
                   Connect to the gateway to see your bots. Click the indicator to reconnect.
                 </p>

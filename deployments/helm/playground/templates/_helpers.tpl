@@ -1,12 +1,12 @@
-{{- define "agentfield.name" -}}
+{{- define "playground.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{- define "agentfield.fullname" -}}
+{{- define "playground.fullname" -}}
 {{- if .Values.fullnameOverride -}}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
-{{- $name := include "agentfield.name" . -}}
+{{- $name := include "playground.name" . -}}
 {{- if contains $name .Release.Name -}}
 {{- .Release.Name | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
@@ -15,32 +15,32 @@
 {{- end -}}
 {{- end -}}
 
-{{- define "agentfield.labels" -}}
-app.kubernetes.io/name: {{ include "agentfield.name" . }}
+{{- define "playground.labels" -}}
+app.kubernetes.io/name: {{ include "playground.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | quote }}
 {{- end -}}
 
-{{- define "agentfield.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "agentfield.name" . }}
+{{- define "playground.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "playground.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
-{{- define "agentfield.controlPlane.fullname" -}}
-{{- printf "%s-control-plane" (include "agentfield.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- define "playground.controlPlane.fullname" -}}
+{{- printf "%s-control-plane" (include "playground.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{- define "agentfield.postgres.fullname" -}}
-{{- printf "%s-postgres" (include "agentfield.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- define "playground.postgres.fullname" -}}
+{{- printf "%s-postgres" (include "playground.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{- define "agentfield.demoAgent.fullname" -}}
-{{- printf "%s-demo-agent" (include "agentfield.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- define "playground.demoAgent.fullname" -}}
+{{- printf "%s-demo-agent" (include "playground.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{- define "agentfield.controlPlane.grpcPort" -}}
+{{- define "playground.controlPlane.grpcPort" -}}
 {{- $grpcPort := int (default 0 .Values.controlPlane.service.grpcPort) -}}
 {{- if eq $grpcPort 0 -}}
 {{- add (int .Values.controlPlane.service.port) 100 -}}
@@ -49,29 +49,29 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 
-{{- define "agentfield.controlPlane.postgresUrl" -}}
+{{- define "playground.controlPlane.postgresUrl" -}}
 {{- $url := default "" .Values.controlPlane.storage.postgresUrl -}}
 {{- if $url -}}
 {{- $url -}}
 {{- else if and .Values.postgres.enabled (not .Values.postgres.auth.existingSecret) -}}
-{{- printf "postgres://%s:%s@%s:5432/%s?sslmode=disable" .Values.postgres.auth.username .Values.postgres.auth.password (include "agentfield.postgres.fullname" .) .Values.postgres.auth.database -}}
+{{- printf "postgres://%s:%s@%s:5432/%s?sslmode=disable" .Values.postgres.auth.username .Values.postgres.auth.password (include "playground.postgres.fullname" .) .Values.postgres.auth.database -}}
 {{- else -}}
 {{- "" -}}
 {{- end -}}
 {{- end -}}
 
-{{- define "agentfield.apiAuth.secretName" -}}
+{{- define "playground.apiAuth.secretName" -}}
 {{- if .Values.apiAuth.existingSecret -}}
 {{- .Values.apiAuth.existingSecret -}}
 {{- else -}}
-{{- printf "%s-api-auth" (include "agentfield.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- printf "%s-api-auth" (include "playground.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 {{- end -}}
 
-{{- define "agentfield.postgres.secretName" -}}
+{{- define "playground.postgres.secretName" -}}
 {{- if .Values.postgres.auth.existingSecret -}}
 {{- .Values.postgres.auth.existingSecret -}}
 {{- else -}}
-{{- printf "%s-postgres-auth" (include "agentfield.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- printf "%s-postgres-auth" (include "playground.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 {{- end -}}

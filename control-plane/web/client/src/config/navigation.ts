@@ -13,11 +13,11 @@ export const navigationSections: NavigationSection[] = [
         description: 'Real-time system overview and operational metrics'
       },
       {
-        id: 'canvas',
-        label: 'Canvas',
+        id: 'playground',
+        label: 'Playground',
         href: '/canvas',
         icon: 'bot',
-        description: 'Visual bot orchestration on an infinite canvas'
+        description: 'Visual bot orchestration playground'
       },
       {
         id: 'teams',

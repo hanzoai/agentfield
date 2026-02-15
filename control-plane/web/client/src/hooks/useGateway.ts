@@ -70,7 +70,7 @@ export function useGateway(tenant?: TenantContext) {
 
   // Unique client ID per session (not per page load)
   const clientId = useMemo(
-    () => `bot-canvas-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    () => `playground-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     []
   );
 
@@ -89,7 +89,7 @@ export function useGateway(tenant?: TenantContext) {
       version: CLIENT_VERSION,
       platform: 'web',
       mode: 'operator',
-      displayName: 'Bot Canvas',
+      displayName: 'Hanzo Playground',
     },
     role: 'operator',
     scopes: ['operator.admin'],
